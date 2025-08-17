@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
 class AnichinProvider: Plugin() {
-    override fun load(context: Context) {
+    override fun load() {
         registerMainAPI(Anichin())
         registerExtractorAPI(Rumble())
         registerExtractorAPI(StreamRuby())
