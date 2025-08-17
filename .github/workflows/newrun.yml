@@ -23,16 +23,16 @@ jobs:
         with:
           path: "src"
 
-      - name: Checkout builds
+      - name: Checkout repo
         uses: actions/checkout@v4.2.2
         with:
-          ref: "builds"
-          path: "builds"
+          ref: "repo"
+          path: "repo"
 
-      - name: Clean old builds
+      - name: Clean old repo
         run: |
-          rm $GITHUB_WORKSPACE/builds/*.cs3 || true
-          rm $GITHUB_WORKSPACE/builds/*.jar || true
+          rm $GITHUB_WORKSPACE/repo/*.cs3 || true
+          rm $GITHUB_WORKSPACE/repo/*.jar || true
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4.6.0
@@ -49,13 +49,13 @@ jobs:
           chmod +x gradlew
           ./gradlew make makePluginsJson
           ./gradlew ensureJarCompatibility
-          cp **/build/*.cs3 $GITHUB_WORKSPACE/builds
-          cp **/build/*.jar $GITHUB_WORKSPACE/builds
-          cp build/plugins.json $GITHUB_WORKSPACE/builds
+          cp **/build/*.cs3 $GITHUB_WORKSPACE/repo
+          cp **/build/*.jar $GITHUB_WORKSPACE/repo
+          cp build/plugins.json $GITHUB_WORKSPACE/repo
 
-      - name: Push builds
+      - name: Push repo
         run: |
-          cd $GITHUB_WORKSPACE/builds
+          cd $GITHUB_WORKSPACE/repo
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
           git add .
