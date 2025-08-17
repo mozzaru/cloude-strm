@@ -1,10 +1,10 @@
 [
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anichin.club&size=%size%",
-        "jarFileSize": 119576,
+        "jarFileSize": 119094,
         "apiVersion": 1,
-        "repositoryUrl": "https://github.com/mozzaru/cloudstream-extensions-phisher",
-        "fileSize": 25810,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "fileSize": 25711,
         "status": 1,
         "language": "id",
         "authors": [
@@ -16,11 +16,34 @@
             "Anime",
             "Cartoon"
         ],
-        "version": 42,
+        "version": 2,
         "internalName": "Anichin",
-        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloudstream-extensions-phisher/builds/Anichin.jar",
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Anichin.jar",
         "description": "Anime and Movies",
-        "url": "https://raw.githubusercontent.com/mozzaru/cloudstream-extensions-phisher/builds/Anichin.cs3",
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Anichin.cs3",
         "name": "Anichin"
+    },
+    {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://donghub.vip&size=%size%",
+        "jarFileSize": 56264,
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "fileSize": 14859,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "mozzaru"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "Cartoon"
+        ],
+        "version": 3,
+        "internalName": "Donghub",
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Donghub.jar",
+        "description": "Anime and Movies",
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Donghub.cs3",
+        "name": "Donghub"
     }
 ]
