@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.extractors
+package com.donghub
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -313,7 +313,18 @@ class ArchiveExtractor : ExtractorApi() {
 }
 
 // Extractor khusus untuk Archive.org
-class ArchiveOrgExtractor : ArchiveExtractor() {
+class ArchiveOrgExtractor : ExtractorApi() {
     override val name = "ArchiveOrg"
     override val mainUrl = "https://archive.org"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Delegate ke ArchiveExtractor
+        ArchiveExtractor().getUrl(url, referer, subtitleCallback, callback)
+    }
 }
