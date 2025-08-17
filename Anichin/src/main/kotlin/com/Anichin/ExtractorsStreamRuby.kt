@@ -1,6 +1,6 @@
-package com.anichin
+package com.Anichin
 
-//import android.util.Log
+import android.util.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi 
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -51,12 +51,12 @@ open class StreamRuby : ExtractorApi() {
     }
 }
 
-class StreamRubyx1 : StreamRuby() {
-    override var name = "StreamRubyx1"
+class svanila : StreamRuby() {
+    override var name = "svanila"
     override var mainUrl = "https://streamruby.net"
 }
 
-class StreamRubyx2 : StreamRuby() {
-    override var name = "StreamRubyx2"
+class svilla : StreamRuby() {
+    override var name = "svilla"
     override var mainUrl = "https://streamruby.com"
 }
