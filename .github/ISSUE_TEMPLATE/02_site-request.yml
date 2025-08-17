@@ -1,7 +1,7 @@
 name: ⭐ Source Request
 description: Request a new Source
 labels: [Site request]
-assignees: phisher98
+assignees: mozzaru
 body:
 
   - type: input
