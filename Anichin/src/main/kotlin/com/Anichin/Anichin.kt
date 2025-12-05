@@ -11,7 +11,7 @@ class Anichin : MainAPI() {
     override val hasMainPage          = true
     override var lang                 = "id"
     override val hasDownloadSupport   = true
-    override val supportedTypes       = setOf(TvType.Movie,TvType.Anime)
+    override val supportedTypes       = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
         "anime/?order=update" to "Rilisan Terbaru",
@@ -22,8 +22,23 @@ class Anichin : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val home     = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        // FIX: Perbaikan logika URL halaman (Pagination WordPress)
+        val url = if (page == 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            val data = request.data
+
+            if (data.contains("?")) {
+                val split = data.split("?")
+                "$mainUrl/${split[0]}/page/$page/?${split[1]}"
+            } else {
+                "$mainUrl/$data/page/$page/"
+            }
+        }
+
+        val document = app.get(url).document
+
+        val home = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
             list    = HomePageList(
@@ -39,11 +54,11 @@ class Anichin : MainAPI() {
         val title     = this.select("div.bsx > a").attr("title")
         val href      = fixUrl(this.select("div.bsx > a").attr("href"))
         val posterUrl = fixUrlNull(this.select("div.bsx > a img").attr("src"))
-        return newMovieSearchResponse(title, href, TvType.Movie) {
+
+        return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
         }
     }
-
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchResponse = mutableListOf<SearchResponse>()
@@ -51,7 +66,7 @@ class Anichin : MainAPI() {
         for (i in 1..3) {
             val document = app.get("${mainUrl}/page/$i/?s=$query").document
 
-            val results = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+            val results = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
 
             if (!searchResponse.containsAll(results)) {
                 searchResponse.addAll(results)
@@ -69,36 +84,43 @@ class Anichin : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         val title       = document.selectFirst("h1.entry-title")?.text()?.trim().toString()
-        val href=document.selectFirst(".eplister li > a")?.attr("href") ?:""
-        var poster = document.select("div.ime > img").attr("src")
+        val href        = fixUrl(document.selectFirst(".eplister li > a")?.attr("href") ?: "")
+        var poster      = document.select("div.ime > img").attr("src")
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
-        val type=document.selectFirst(".spe")?.text().toString()
-        val tvtag=if (type.contains("Movie")) TvType.Movie else TvType.TvSeries
+        val type        = document.selectFirst(".spe")?.text().toString()
+
+        val tvtag = if (type.contains("Movie", true)) TvType.Movie else TvType.TvSeries
+        
         return if (tvtag == TvType.TvSeries) {
-            val Eppage= document.selectFirst(".eplister li > a")?.attr("href") ?:""
-            val doc= app.get(Eppage).document
-            val episodes=doc.select("div.episodelist > ul > li").map { info->
-                        val href1 = info.select("a").attr("href")
-                        val episode = info.select("a span").text().substringAfter("-").substringBeforeLast("-")
-                        val posterr=info.selectFirst("a img")?.attr("src") ?:""
-                        newEpisode(href1)
-                        {
-                            this.name=episode
-                            this.posterUrl=posterr
-                        }
+            val epPageLinkRaw = document.selectFirst(".eplister li > a")?.attr("href") ?: ""
+            val fullEpPageLink = fixUrl(epPageLinkRaw)
+            
+            val doc = if (fullEpPageLink.isNotEmpty()) { 
+                app.get(fullEpPageLink).document 
+            } else { 
+                document 
             }
-            if (poster.isEmpty())
-            {
-                poster=document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
+
+            val episodes = doc.select("div.episodelist > ul > li").map { info ->
+                val href1 = fixUrl(info.select("a").attr("href"))
+                val episode = info.select("a span").text().substringAfter("-").substringBeforeLast("-")
+                val posterr = info.selectFirst("a img")?.attr("src") ?: ""
+                newEpisode(href1) {
+                    this.name = episode
+                    this.posterUrl = posterr
+                }
+            }
+            
+            if (poster.isEmpty()) {
+                poster = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
             }
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.reversed()) {
                 this.posterUrl = poster
                 this.plot = description
             }
         } else {
-            if (poster.isEmpty())
-            {
-                poster=document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
+            if (poster.isEmpty()) {
+                poster = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
             }
             newMovieLoadResponse(title, url, TvType.Movie, href) {
                 this.posterUrl = poster
@@ -109,13 +131,18 @@ class Anichin : MainAPI() {
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val document = app.get(data).document
-        document.select(".mobius option").forEach { server->
+        document.select(".mobius option").forEach { server ->
             val base64 = server.attr("value")
-            val decoded=base64Decode(base64)
-            val doc = Jsoup.parse(decoded)
-            val href=doc.select("iframe").attr("src")
-            val url = fixUrl(href)
-            loadExtractor(url,subtitleCallback, callback)
+
+            try {
+                val decoded = base64Decode(base64)
+                val doc = Jsoup.parse(decoded)
+                val href = doc.select("iframe").attr("src")
+                val url = fixUrl(href)
+                loadExtractor(url, subtitleCallback, callback)
+            } catch (e: Exception) {
+                // Ignore error decode
+            }
         }
         return true
     }

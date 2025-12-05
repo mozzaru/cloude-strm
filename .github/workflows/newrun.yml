@@ -11,20 +11,24 @@ on:
       # choose your default branch
       - master
       - main
+      - Test
     paths-ignore:
       - '*.md'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # FIX 1: Memberikan izin tulis (Write) ke bot agar bisa melakukan git push
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4 # FIX 2: Menggunakan versi v4 (Stabil)
         with:
           path: "src"
 
       - name: Checkout builds
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4 # FIX 3: Menggunakan versi v4 (Stabil)
         with:
           ref: "builds"
           path: "builds"
@@ -35,13 +39,13 @@ jobs:
           #rm $GITHUB_WORKSPACE/builds/*.jar || true
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4.6.0
+        uses: actions/setup-java@v4 # FIX 4: Menggunakan versi v4 (Stabil)
         with:
           distribution: "adopt"
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3.2.2
+        uses: android-actions/setup-android@v3
 
       - name: Build Plugins
         run: |

@@ -1,9 +1,14 @@
 name: Delete old build attempts
 on:
-  workflow_dispatch
+  workflow_dispatch:
+
 jobs:
   del_runs:
     runs-on: ubuntu-latest
+    # FIX: Menambahkan izin 'write' agar bot bisa menghapus run
+    permissions:
+      actions: write
+      contents: read
     steps:
       - name: Delete workflow runs
         uses: Mattraks/delete-workflow-runs@v2
@@ -12,3 +17,5 @@ jobs:
           repository: ${{ github.repository }}
           retain_days: 0
           keep_minimum_runs: 0
+          # Opsional: Jika ingin spesifik menghapus SEMUA jenis status (Sukses, Gagal, Dibatalkan)
+          delete_run_by_conclusion_pattern: "success,failure,skipped,cancelled"
