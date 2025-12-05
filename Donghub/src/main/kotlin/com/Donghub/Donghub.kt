@@ -1,13 +1,13 @@
-package com.Anichin
+package com.Donghub
 
 import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 
-class Anichin : MainAPI() {
-    override var mainUrl              = "https://anichin.moe"
-    override var name                 = "Anichin"
+class Donghub : MainAPI() {
+    override var mainUrl              = "https://Donghub.vip"
+    override var name                 = "Donghub"
     override val hasMainPage          = true
     override var lang                 = "id"
     override val hasDownloadSupport   = true

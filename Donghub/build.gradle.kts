@@ -1,12 +1,12 @@
 // use an integer for version numbers
-version = 8
+version = 5
 
 cloudstream {
     // All of these properties are optional, you can safely remove them
 
     description = "Anime and Movies"
     language    = "id"
-    authors = listOf("mozzaru")
+    authors = listOf("mozzaru", "kraptor")
 
     /**
     * Status int as the following:
@@ -23,5 +23,5 @@ cloudstream {
     tvTypes = listOf("AnimeMovie","Anime","Cartoon")
     iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://donghub.vip&size=%size%"
 
-    isCrossPlatform = true
+    isCrossPlatform = false
 }
