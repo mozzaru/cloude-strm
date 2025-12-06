@@ -68,38 +68,50 @@ class Donghub : MainAPI() {
     @Suppress("SuspiciousIndentation")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        val title       = document.selectFirst("h1.entry-title")?.text()?.trim().toString()
-        val href=document.selectFirst(".eplister li > a")?.attr("href") ?:""
+        
+        // Ambil Title
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
+        
+        // Ambil Poster (Coba dari div.ime, kalau gagal ambil dari meta tag)
         var poster = document.select("div.ime > img").attr("src")
+        if (poster.isEmpty()) {
+            poster = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim() ?: ""
+        }
+        
+        // Ambil Deskripsi
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
-        val type=document.selectFirst(".spe")?.text().toString()
-        val tvtag=if (type.contains("Movie")) TvType.Movie else TvType.TvSeries
-        return if (tvtag == TvType.TvSeries) {
-            val Eppage= document.selectFirst(".eplister li > a")?.attr("href") ?:""
-            val doc= app.get(Eppage).document
-            val episodes=doc.select("div.episodelist > ul > li").map { info->
-                        val href1 = info.select("a").attr("href")
-                        val episode = info.select("a span").text().substringAfter("-").substringBeforeLast("-")
-                        val posterr=info.selectFirst("a img")?.attr("src") ?:""
-                        newEpisode(href1)
-                        {
-                            this.name=episode
-                            this.posterUrl=posterr
-                        }
+        
+        // Cek Tipe (Movie atau Series)
+        val type = document.selectFirst(".spe")?.text().toString()
+        val isMovie = type.contains("Movie", true)
+
+        return if (!isMovie) {
+            val episodes = document.select("#chapterlist > ul > li, div.eplister > ul > li, ul.clstyle > li").mapNotNull { info ->
+                val href = fixUrl(info.select("a").attr("href"))
+                if (href.isEmpty()) return@mapNotNull null
+                
+                // Ambil nomor episode dan judul
+                val numSpan = info.select(".epl-num, .chapternum, .be").text()
+                val titleSpan = info.select(".epl-title").text()
+                
+                // Fallback nama episode
+                val epName = if (titleSpan.isNotEmpty()) titleSpan else numSpan
+                val epNum = numSpan.filter { it.isDigit() }.toIntOrNull()
+
+                newEpisode(href) {
+                    this.name = epName
+                    this.episode = epNum
+                    this.posterUrl = poster 
+                }
             }
-            if (poster.isEmpty())
-            {
-                poster=document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
-            }
+
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.reversed()) {
                 this.posterUrl = poster
                 this.plot = description
             }
         } else {
-            if (poster.isEmpty())
-            {
-                poster=document.selectFirst("meta[property=og:image]")?.attr("content")?.trim().toString()
-            }
+            val href = document.selectFirst("#epilist a, .eplister li a")?.attr("href") ?: url
+            
             newMovieLoadResponse(title, url, TvType.Movie, href) {
                 this.posterUrl = poster
                 this.plot = description
