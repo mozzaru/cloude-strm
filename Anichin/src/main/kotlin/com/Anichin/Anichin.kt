@@ -129,21 +129,79 @@ class Anichin : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        val document = app.get(data).document
-        document.select(".mobius option").forEach { server ->
-            val base64 = server.attr("value")
+    override suspend fun loadLinks(
+        data: String, 
+        isCasting: Boolean, 
+        subtitleCallback: (SubtitleFile) -> Unit, 
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        
+        val doc = app.get(data).document
 
-            try {
-                val decoded = base64Decode(base64)
-                val doc = Jsoup.parse(decoded)
-                val href = doc.select("iframe").attr("src")
-                val url = fixUrl(href)
-                loadExtractor(url, subtitleCallback, callback)
-            } catch (e: Exception) {
-                // Ignore error decode
+        // Decode Base64 dari Dropdown (.mobius / select.mirror)
+        doc.select(".mobius option, select.mirror option").forEach { option ->
+            val base64 = option.attr("value")
+            if (base64.isNotEmpty()) {
+                try {
+                    val decoded = base64Decode(base64)
+                    val doc2 = Jsoup.parse(decoded)
+                    val src = doc2.select("iframe").attr("src")
+                    
+                    if (src.isNotBlank()) {
+                        val url = fixUrl(src)
+                        invokeCustomExtractor(url, subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                }
             }
         }
+        
+        // Cek Fallback Iframe (Jaga-jaga)
+        doc.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                val url = fixUrl(src)
+                invokeCustomExtractor(url, subtitleCallback, callback)
+            }
+        }
+
         return true
+    }
+
+    private suspend fun invokeCustomExtractor(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleanUrl = url.trim()
+        
+        when {
+            // A. NEW PLAYER (Short.icu) -> Panggil Extractor ShortIcu
+            cleanUrl.contains("short.icu") -> {
+                NewPlayer().getUrl(cleanUrl, "$mainUrl/", subtitleCallback, callback)
+            }
+
+            // B. RPMSHARE -> Panggil Extractor RPMVid
+            cleanUrl.contains("rpmvid") -> {
+                RPMVid().getUrl(cleanUrl, "$mainUrl/", subtitleCallback, callback)
+            }
+
+            // C. MEGA (Bawaan Cloudstream)
+            cleanUrl.contains("mega.nz") || cleanUrl.contains("mega.co.nz") -> {
+                loadExtractor(cleanUrl, subtitleCallback, callback)
+            }
+
+            // D. DOOD (MyVidPlay -> Dood)
+            cleanUrl.contains("myvidplay") -> {
+                // Ubah domain agar dideteksi sebagai Doodstream
+                val doodUrl = cleanUrl.replace("myvidplay.com", "dood.li")
+                loadExtractor(doodUrl, "$mainUrl/", subtitleCallback, callback)
+            }
+
+            // E. DEFAULT
+            else -> {
+                loadExtractor(cleanUrl, "$mainUrl/", subtitleCallback, callback)
+            }
+        }
     }
 }

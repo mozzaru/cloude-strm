@@ -21,6 +21,8 @@ class AnichinProvider: Plugin() {
         registerExtractorAPI(Vidguardto1())
         registerExtractorAPI(Vidguardto2())
         registerExtractorAPI(Vidguardto3())
+        registerExtractorAPI(NewPlayer())
+        registerExtractorAPI(RPMVid())
 
     }
 }
