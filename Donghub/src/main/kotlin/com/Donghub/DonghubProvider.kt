@@ -11,5 +11,6 @@ class DonghubProvider: Plugin() {
         registerExtractorAPI(ArchiveOrgExtractor())
         registerExtractorAPI(Dailymotion())
         registerExtractorAPI(Geodailymotion())
+        registerExtractorAPI(NeoVideo())
     }
 }

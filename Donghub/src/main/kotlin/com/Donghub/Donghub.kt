@@ -119,16 +119,64 @@ class Donghub : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+    
         val document = app.get(data).document
-        document.select(".mobius option").forEach { server->
-            val base64 = server.attr("value")
-            val decoded=base64Decode(base64)
-            val doc = Jsoup.parse(decoded)
-            val href=doc.select("iframe").attr("src")
-            val url = fixUrl(href)
-            loadExtractor(url,subtitleCallback, callback)
+    
+        // ========== PRIMARY <video><source> ==========
+        document.select("video source[src]").forEach { tag ->
+            val url = fixUrl(tag.attr("src"))
+    
+            val link = newExtractorLink(
+                source = "Donghub",
+                name = "Primary",
+                url = url,
+                type = INFER_TYPE
+            ).apply {
+                referer = "https://donghub.vip/"
+                headers = mapOf(
+                    "Referer" to "https://donghub.vip/",
+                    "Range" to "bytes=0-"
+                )
+                quality = 0
+            }
+    
+            callback(link)
         }
+    
+        // ========== MIRROR (base64 decode) ==========
+        document.select(".mobius option, .mirror option").forEach { opt ->
+            val base64 = opt.attr("value")
+            if (base64.isBlank()) return@forEach
+    
+            val label = opt.text().trim()
+    
+            val decoded = base64Decode(base64)
+            val innerDoc = org.jsoup.Jsoup.parse(decoded)
+    
+            innerDoc.select("video source[src]").forEach { s ->
+                val mirrorUrl = fixUrl(s.attr("src"))
+    
+                val link = newExtractorLink(
+                    source = "Donghub",
+                    name = label,     // contoh: DailyMotion, OKRU
+                    url = mirrorUrl,
+                    type = INFER_TYPE
+                ).apply {
+                    referer = "https://donghub.vip/"
+                    headers = mapOf("Referer" to "https://donghub.vip/")
+                    quality = 0
+                }
+    
+                callback(link)
+            }
+        }
+    
         return true
     }
 }
