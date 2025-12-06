@@ -126,57 +126,67 @@ class Donghub : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
     
-        val document = app.get(data).document
+        val doc = app.get(data).document
     
-        // ========== PRIMARY <video><source> ==========
-        document.select("video source[src]").forEach { tag ->
+        // 1. DIRECT MP4 (NEOVIDEO) - Deteksi Video Tag
+        doc.select("video source[src]").forEach { tag ->
             val url = fixUrl(tag.attr("src"))
-    
-            val link = newExtractorLink(
-                source = "Donghub",
-                name = "Primary",
-                url = url,
-                type = INFER_TYPE
-            ).apply {
-                referer = "https://donghub.vip/"
-                headers = mapOf(
-                    "Referer" to "https://donghub.vip/",
-                    "Range" to "bytes=0-"
-                )
-                quality = 0
-            }
-    
-            callback(link)
+            callback(
+                newExtractorLink(
+                    source = "Donghub Direct",
+                    name = "Donghub Direct",
+                    url = url,
+                    type = INFER_TYPE
+                ) {
+                    this.referer = "$mainUrl/" 
+                } 
+            )
         }
     
-        // ========== MIRROR (base64 decode) ==========
-        document.select(".mobius option, .mirror option").forEach { opt ->
-            val base64 = opt.attr("value")
-            if (base64.isBlank()) return@forEach
-    
-            val label = opt.text().trim()
-    
-            val decoded = base64Decode(base64)
-            val innerDoc = org.jsoup.Jsoup.parse(decoded)
-    
-            innerDoc.select("video source[src]").forEach { s ->
-                val mirrorUrl = fixUrl(s.attr("src"))
-    
-                val link = newExtractorLink(
-                    source = "Donghub",
-                    name = label,     // contoh: DailyMotion, OKRU
-                    url = mirrorUrl,
-                    type = INFER_TYPE
-                ).apply {
-                    referer = "https://donghub.vip/"
-                    headers = mapOf("Referer" to "https://donghub.vip/")
-                    quality = 0
+        // 2. MIRRORS BASE64 (Dropdown)
+        doc.select(".mobius option, .mirror option").forEach { server ->
+            val base64 = server.attr("value")
+            try {
+                val decoded = base64Decode(base64)
+                val doc2 = Jsoup.parse(decoded)
+                val href = doc2.select("iframe").attr("src")
+                if (href.isNotBlank()) {
+                    val url = fixUrl(href)
+                    invokeExtractor(url, subtitleCallback, callback)
                 }
+            } catch (e: Exception) {}
+        }
     
-                callback(link)
+        // 3. FALLBACK IFRAME (TurboVid di Body)
+        doc.select("iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                val url = fixUrl(src)
+                invokeExtractor(url, subtitleCallback, callback)
             }
         }
     
         return true
+    }
+
+    // ==========================================
+    // FUNGSI BANTUAN AGAR EXTRACTOR PASTI JALAN
+    // ==========================================
+    private suspend fun invokeExtractor(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Cek manual URL-nya, lalu panggil Extractor class-nya langsung
+        if (url.contains("turbovidhls.com") || url.contains("turboviplay.com")) {
+            TurboVid().getUrl(url, "$mainUrl/", subtitleCallback, callback)
+        } 
+        else if (url.contains("nos.jkt-1.neo.id")) {
+            NeoVideo().getUrl(url, "$mainUrl/", subtitleCallback, callback)
+        } 
+        else {
+            // Jika bukan server custom kita, biarkan Cloudstream menanganinya
+            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+        }
     }
 }
