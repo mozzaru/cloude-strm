@@ -6,7 +6,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class Donghub : MainAPI() {
-    override var mainUrl = "https://Donghub.vip"
+    override var mainUrl = "https://donghub.vip"
     override var name = "Donghub"
     override val hasMainPage = true
     override var lang = "id"
@@ -98,22 +98,23 @@ class Donghub : MainAPI() {
         }
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
 
-        val episodeElements = document.select("div.episodelist > ul > li")
-        val episodeElementsAlt = document.select("div.eplister > ul > li")
-        val episodeList = if (episodeElements.isNotEmpty()) episodeElements else episodeElementsAlt
+        // Selector fix sesuai HTML aktual Donghub
+        val episodeList = document.select("div.eplister ul li")
 
         val isSeries = episodeList.isNotEmpty()
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
         val episodes = if (isSeries) {
-            episodeList.mapIndexed { index, it ->
-                val epHref = it.selectFirst("a")?.attr("href").orEmpty()
-                val epName = it.select("a span")?.text()?.substringAfter("-")?.substringBeforeLast("-")?.trim()
-                val epPoster = it.selectFirst("a img")?.attr("src").orEmpty()
+            episodeList.mapNotNull { li ->
+                val a = li.selectFirst("a") ?: return@mapNotNull null
+                val epHref = fixUrl(a.attr("href"))
+                val epNum = li.selectFirst("div.epl-num")?.text()?.trim()
+                val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
 
                 newEpisode(epHref) {
-                    this.name = if (!epName.isNullOrBlank()) epName else "Episode ${index + 1}"
-                    this.posterUrl = epPoster
+                    this.name = epTitle ?: "Episode $epNum"
+                    this.episode = epNum?.toIntOrNull()
+                    this.posterUrl = poster  // fallback poster anime, donghub tidak ada thumbnail per episode
                 }
             }.reversed()
         } else {

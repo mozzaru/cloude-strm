@@ -22,25 +22,22 @@ class Anichin : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val allItems = mutableListOf<SearchResponse>()
-        val maxPages = if (request.name in listOf("Rilisan Terbaru", "Series Completed")) 3 else 1
-        var hasNext = false
-
-        for (i in 1..maxPages) {
-            val document = app.get("$mainUrl/${request.data}&page=$i").document
-            val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
-            allItems.addAll(items)
-
-            val lastPage = document.select("a.page-numbers").lastOrNull()?.text()?.toIntOrNull()
-            if (lastPage != null && i < lastPage) {
-                hasNext = true
-            }
+        val url = if (page == 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            "$mainUrl/${request.data.trimEnd('/')}/page/$page/"
         }
+        val document = app.get(url).document
+        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+
+        val lastPage = document.select("a.page-numbers:not(.next)")
+            .lastOrNull()?.text()?.trim()?.toIntOrNull() ?: 1
+        val hasNext = page < lastPage
 
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
-                list = allItems,
+                list = items,
                 isHorizontalImages = false
             ),
             hasNext = hasNext
@@ -54,31 +51,19 @@ class Anichin : MainAPI() {
         val img = aTag.selectFirst("img")
 
         val posterUrlRaw = img?.run {
-            attr("data-src").ifBlank {
-                attr("src")
-            }.ifBlank {
-                attr("data-lazy-src")
-            }
+            attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
         }.orEmpty()
 
-        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) {
-            "https:$posterUrlRaw"
-        } else {
-            posterUrlRaw
-        }
-
+        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
         val posterUrl = fixUrlNull(posterUrlFixed)
 
-        val type = if (href.contains("/movie/")) TvType.Movie else TvType.Anime
-        val statusLabel = this.selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
+        // Anichin: href adalah episode page, ambil series title dari div.tt
+        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
+            ?.ifBlank { rawTitle } ?: rawTitle
 
-        val titleWithStatus = if ("complete" in statusLabel) {
-            "$rawTitle (Completed)"
-        } else {
-            rawTitle
-        }
+        val type = if (href.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
 
-        return newMovieSearchResponse(titleWithStatus, href, type) {
+        return newMovieSearchResponse(seriesTitle, href, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -98,22 +83,30 @@ class Anichin : MainAPI() {
         }
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
 
-        val episodeElements = document.select("div.episodelist > ul > li")
-        val episodeElementsAlt = document.select("div.eplister > ul > li")
-        val episodeList = if (episodeElements.isNotEmpty()) episodeElements else episodeElementsAlt
+        // Anichin: episode list ada di halaman episode, bukan series
+        // Ambil dari div.episodelist ul li
+        val episodeList = document.select("div.episodelist ul li")
 
         val isSeries = episodeList.isNotEmpty()
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
         val episodes = if (isSeries) {
-            episodeList.mapIndexed { index, it ->
-                val epHref = it.selectFirst("a")?.attr("href").orEmpty()
-                val epName = it.select("a span")?.text()?.substringAfter("-")?.substringBeforeLast("-")?.trim()
-                val epPoster = it.selectFirst("a img")?.attr("src").orEmpty()
+            episodeList.mapNotNull { li ->
+                val a = li.selectFirst("a") ?: return@mapNotNull null
+                val epHref = fixUrl(a.attr("href"))
+                val epTitle = li.selectFirst("div.playinfo h3")?.text()?.trim()
+                val epSpan = li.selectFirst("div.playinfo span")?.text()?.trim()
+                // Ambil nomor episode dari span "Eps 02 - April 25, 2026"
+                val epNum = epSpan?.substringAfter("Eps ")?.substringBefore(" -")?.trim()?.toIntOrNull()
+                // Thumbnail per episode tersedia!
+                val epPoster = li.selectFirst("div.thumbnel img")?.run {
+                    attr("src").ifBlank { attr("data-src") }
+                }.orEmpty()
 
                 newEpisode(epHref) {
-                    this.name = if (!epName.isNullOrBlank()) epName else "Episode ${index + 1}"
-                    this.posterUrl = epPoster
+                    this.name = epTitle ?: "Episode $epNum"
+                    this.episode = epNum
+                    this.posterUrl = epPoster.ifBlank { poster }
                 }
             }.reversed()
         } else {
