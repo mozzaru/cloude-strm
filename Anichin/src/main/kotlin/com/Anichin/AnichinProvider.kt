@@ -1,12 +1,11 @@
 package com.Anichin
 
-import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
 class AnichinProvider: Plugin() {
-    override fun load(context: Context) {
+    override fun load() {
         registerMainAPI(Anichin())
         registerExtractorAPI(Odnoklassniki())
         registerExtractorAPI(OkRuSSL())
@@ -19,6 +18,5 @@ class AnichinProvider: Plugin() {
         registerExtractorAPI(Vidguardto1())
         registerExtractorAPI(Vidguardto2())
         registerExtractorAPI(Vidguardto3())
-
     }
 }
