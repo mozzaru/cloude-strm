@@ -12,19 +12,14 @@ class Donghub : MainAPI() {
 
     private val baseHeaders = mapOf(
         "Referer" to "$mainUrl/",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none",
-        "Upgrade-Insecure-Requests" to "1",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
         "Cache-Control" to "no-cache",
         "Pragma" to "no-cache",
-        "Sec-Ch-Ua" to "\"Not-A.Chromium\";v=\"124\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
-        "Sec-Ch-Ua-Mobile" to "?0",
-        "Sec-Ch-Ua-Platform" to "\"Windows\"",
-        "Sec-Fetch-User" to "?1"
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Dest" to "document",
     )
     override var lang = "id"
     override val hasDownloadSupport = true
@@ -41,7 +36,9 @@ class Donghub : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) {
-            if (request.data == "popular-today") mainUrl else "$mainUrl/${request.data}"
+            if (request.data == "popular-today") mainUrl else {
+                if (request.data.isEmpty()) "$mainUrl/?t=${System.currentTimeMillis() / 1000}" else "$mainUrl/${request.data}"
+            }
         } else {
             if (request.data == "popular-today") return newHomePageResponse(
                 list = HomePageList(name = request.name, list = emptyList(), isHorizontalImages = false),
@@ -56,7 +53,7 @@ class Donghub : MainAPI() {
                 "$mainUrl/$dataPath$pagePath".replace("//page/", "/page/")
             }
         }
-        val document = app.get(url, headers = baseHeaders).document
+        val document = app.get(url, headers = baseHeaders, timeout = 60).document
         val selector = when (request.data) {
             "popular-today" -> "div.listupd.popularslider article"
             "" -> "div.listupd.normal article, div.listupd:not(.popularslider) article"
@@ -99,9 +96,9 @@ class Donghub : MainAPI() {
         val type = if (href.contains("/movie/", ignoreCase = true) ||
             typeLabel.contains("movie")
         ) TvType.Movie else TvType.Anime
-        val statusLabel = this.selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
+        val statusLabel = (this.selectFirst("div.status")?.text() ?: this.selectFirst("div.bt span")?.text()).orEmpty().lowercase()
 
-        val titleWithStatus = if ("complete" in statusLabel) {
+        val titleWithStatus = if ("complete" in statusLabel || "tamat" in statusLabel) {
             "$rawTitle (Completed)"
         } else {
             rawTitle
@@ -122,13 +119,13 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", headers = baseHeaders).document
+        val document = app.get("$mainUrl/?s=$query", headers = baseHeaders, timeout = 60).document
         return document.select("div.listupd article").mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val initialDocument = app.get(url, headers = baseHeaders).document
+        val initialDocument = app.get(url, headers = baseHeaders, timeout = 60).document
 
         // Check if it's an episode page
         val seriesLink = initialDocument.selectFirst("div.breadcrumb a[href*=\"/anime/\"], div.breadcrumb a[href*=\"/series/\"], span.all-episodes a")
@@ -202,7 +199,7 @@ class Donghub : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = baseHeaders).document
+        val document = app.get(data, headers = baseHeaders, timeout = 60).document
 
         document.select(".mobius option").forEach { server ->
             val base64 = server.attr("value").trim()
