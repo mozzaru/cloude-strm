@@ -22,25 +22,30 @@ class Donghub : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val allItems = mutableListOf<SearchResponse>()
-        val maxPages = if (request.name in listOf("Rilisan Terbaru", "Series Completed")) 3 else 1
-        var hasNext = false
-
-        for (i in 1..maxPages) {
-            val document = app.get("$mainUrl/${request.data}&page=$i").document
-            val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
-            allItems.addAll(items)
-
-            val lastPage = document.select("a.page-numbers").lastOrNull()?.text()?.toIntOrNull()
-            if (lastPage != null && i < lastPage) {
-                hasNext = true
+        val url = if (page == 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            val (path, query) = if (request.data.contains("?")) {
+                request.data.split("?", limit = 2)
+            } else {
+                listOf(request.data, "")
+            }
+            val cleanPath = path.trimEnd('/')
+            if (query.isNotEmpty()) {
+                "$mainUrl/$cleanPath/page/$page/?$query"
+            } else {
+                "$mainUrl/$cleanPath/page/$page/"
             }
         }
+        val document = app.get(url).document
+        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+
+        val hasNext = document.selectFirst("a.next, a.page-numbers.next") != null
 
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
-                list = allItems,
+                list = items,
                 isHorizontalImages = false
             ),
             hasNext = hasNext
@@ -69,7 +74,9 @@ class Donghub : MainAPI() {
 
         val posterUrl = fixUrlNull(posterUrlFixed)
 
-        val type = if (href.contains("/movie/")) TvType.Movie else TvType.Anime
+        val type = if (href.contains("/movie/", ignoreCase = true) ||
+            selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true
+        ) TvType.Movie else TvType.Anime
         val statusLabel = this.selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
 
         val titleWithStatus = if ("complete" in statusLabel) {
