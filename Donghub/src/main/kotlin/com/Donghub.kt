@@ -31,41 +31,34 @@ class Donghub : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "" to "Rilisan Terbaru",
+        "anime/?order=update" to "Rilisan Terbaru",
         "popular-today" to "Populer Hari Ini",
         "anime/?order=popular" to "Populer",
-        "anime/?status=ongoing&order=update" to "Ongoing",
-        "anime/?status=completed&order=update" to "Completed",
-        "anime/?status=&type=movie&order=update" to "Movie"
+        "anime/?status=ongoing&sub=&order=" to "Ongoing",
+        "anime/?status=completed&type=" to "Completed",
+        "anime/?status=&type=movie&order=" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) {
-            if (request.data == "popular-today") mainUrl else "$mainUrl/${request.data}"
-        } else {
-            if (request.data == "popular-today") return newHomePageResponse(
+        if (request.data == "popular-today") {
+            if (page > 1) return newHomePageResponse(
                 list = HomePageList(name = request.name, list = emptyList(), isHorizontalImages = false),
                 hasNext = false
             )
-            val pagePath = "page/$page/"
-            if (request.data.contains("?")) {
-                val split = request.data.split("?")
-                "$mainUrl/${split[0]}$pagePath?${split[1]}"
-            } else {
-                val dataPath = if (request.data.isEmpty()) "" else "${request.data.removeSuffix("/")}/"
-                "$mainUrl/$dataPath$pagePath".replace("//page/", "/page/")
-            }
-        }
-        val document = app.get(url, headers = baseHeaders).document
-        val selector = when (request.data) {
-            "popular-today" -> "div.listupd.popularslider article"
-            "" -> "div.listupd.normal article, div.listupd:not(.popularslider) article"
-            else -> "div.listupd article"
+            val document = app.get(mainUrl, headers = baseHeaders).document
+            val items = document.select("div.popconslide article").mapNotNull { it.toSearchResult() }
+            return newHomePageResponse(
+                list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
+                hasNext = false
+            )
         }
 
-        val items = document.select(selector).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
-        val hasNext = if (request.data == "popular-today") false else
-            document.selectFirst("div.hpage a.r, div.pagination a.next, div.pagination a:contains(Next)") != null
+        val url = if (page == 1) "$mainUrl/${request.data}"
+        else "$mainUrl/${request.data}&page=$page"
+
+        val document = app.get(url, headers = baseHeaders).document
+        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val hasNext = document.selectFirst("div.hpage a.r") != null
 
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
@@ -75,49 +68,36 @@ class Donghub : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
-        val rawTitle = (selectFirst(".eggtitle")?.text() ?: aTag.attr("title")).ifBlank { aTag.text() }.trim()
+        val rawTitle = aTag.attr("title").ifBlank { 
+            selectFirst("div.tt")?.ownText().orEmpty()
+        }.ifBlank { aTag.text() }.trim()
         val href = fixUrl(aTag.attr("href"))
         val img = aTag.selectFirst("img")
 
         val posterUrlRaw = img?.run {
-            attr("data-src").ifBlank {
-                attr("src")
-            }.ifBlank {
-                attr("data-lazy-src")
-            }
+            attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
         }.orEmpty()
 
-        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) {
-            "https:$posterUrlRaw"
-        } else {
-            posterUrlRaw
-        }
+        val posterUrl = fixUrlNull(
+            if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
+        )
 
-        val posterUrl = fixUrlNull(posterUrlFixed)
-
-        val typeLabel = selectFirst(".typez, .eggtype")?.text()?.lowercase().orEmpty()
+        val typeLabel = selectFirst(".typez")?.text()?.lowercase().orEmpty()
         val type = if (href.contains("/movie/", ignoreCase = true) ||
             typeLabel.contains("movie")
         ) TvType.Movie else TvType.Anime
-        val statusLabel = this.selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
 
-        val titleWithStatus = if ("complete" in statusLabel) {
+        val epxText = selectFirst("span.epx")?.text().orEmpty()
+        val statusLabel = selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
+        val titleWithStatus = if ("tamat" in epxText.lowercase() || "complete" in statusLabel) {
             "$rawTitle (Completed)"
-        } else {
-            rawTitle
-        }
+        } else rawTitle
 
-        return if (type == TvType.Movie) {
-            newMovieSearchResponse(titleWithStatus, href, type) {
-                this.posterUrl = posterUrl
-            }
-        } else {
-            val epText = selectFirst(".eggepisode")?.text() ?: selectFirst(".epx")?.text()
-            val epNum = epText?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-            newAnimeSearchResponse(titleWithStatus, href, type) {
-                this.posterUrl = posterUrl
-                addSub(epNum)
-            }
+        val epNum = epxText.replace(Regex("[^0-9]"), "").toIntOrNull()
+
+        return newAnimeSearchResponse(titleWithStatus, href, type) {
+            this.posterUrl = posterUrl
+            addSub(epNum)
         }
     }
 
@@ -157,13 +137,14 @@ class Donghub : MainAPI() {
             episodeList.mapNotNull { li ->
                 val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-                val epNum = li.selectFirst("div.epl-num")?.text()?.trim()
+                val epNumText = li.selectFirst("div.epl-num")?.text()?.trim().orEmpty()
+                val epNum = epNumText.replace(Regex("[^0-9]"), "").toIntOrNull()
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
-
+                
                 newEpisode(epHref) {
                     this.name = epTitle ?: "Episode $epNum"
-                    this.episode = epNum?.toIntOrNull()
-                    this.posterUrl = poster  // fallback poster anime, donghub tidak ada thumbnail per episode
+                    this.episode = epNum
+                    this.posterUrl = poster
                 }
             }.reversed()
         } else {
