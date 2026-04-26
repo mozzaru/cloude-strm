@@ -94,10 +94,15 @@ class Donghub : MainAPI() {
         } else rawTitle
 
         val epNum = epxText.replace(Regex("[^0-9]"), "").toIntOrNull()
+        val subLabel = selectFirst("span.sb")?.text()?.lowercase().orEmpty()
 
         return newAnimeSearchResponse(titleWithStatus, href, type) {
             this.posterUrl = posterUrl
-            addSub(epNum)
+            when {
+                "sub" in subLabel -> addSub(epNum)
+                "dub" in subLabel -> addDub(epNum)
+                else -> addSub(epNum)
+            }
         }
     }
 
