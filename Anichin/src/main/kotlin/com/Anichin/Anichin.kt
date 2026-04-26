@@ -15,10 +15,10 @@ class Anichin : MainAPI() {
 
     override val mainPage = mainPageOf(
         "anime/?order=update" to "Rilisan Terbaru",
-        "anime/?status=ongoing&order=update" to "Series Ongoing",
-        "anime/?status=completed&order=update" to "Series Completed",
-        "anime/?status=hiatus&order=update" to "Series Drop/Hiatus",
-        "anime/?type=movie&order=update" to "Movie"
+        "anime/?status=ongoing&sub=&order=" to "Series Ongoing",
+        "anime/?status=completed&type=" to "Series Completed",
+        "anime/?status=hiatus&order=" to "Series Drop/Hiatus",
+        "anime/?status=&type=movie&order=" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
