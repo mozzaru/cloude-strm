@@ -25,29 +25,14 @@ class Anichin : MainAPI() {
         val url = if (page == 1) {
             "$mainUrl/${request.data}"
         } else {
-            val (path, query) = if (request.data.contains("?")) {
-                request.data.split("?", limit = 2)
-            } else {
-                listOf(request.data, "")
-            }
-            val cleanPath = path.trimEnd('/')
-            if (query.isNotEmpty()) {
-                "$mainUrl/$cleanPath/page/$page/?$query"
-            } else {
-                "$mainUrl/$cleanPath/page/$page/"
-            }
+            "$mainUrl/${request.data}&page=$page"
         }
         val document = app.get(url).document
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
-
-        val hasNext = document.selectFirst("a.next, a.page-numbers.next") != null
+        val hasNext = document.selectFirst("div.hpage a.r") != null
 
         return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = items,
-                isHorizontalImages = false
-            ),
+            list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
             hasNext = hasNext
         )
     }
