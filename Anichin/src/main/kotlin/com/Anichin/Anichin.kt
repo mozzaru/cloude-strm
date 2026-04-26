@@ -25,14 +25,22 @@ class Anichin : MainAPI() {
         val url = if (page == 1) {
             "$mainUrl/${request.data}"
         } else {
-            "$mainUrl/${request.data.trimEnd('/')}/page/$page/"
+            val (path, query) = if (request.data.contains("?")) {
+                request.data.split("?", limit = 2)
+            } else {
+                listOf(request.data, "")
+            }
+            val cleanPath = path.trimEnd('/')
+            if (query.isNotEmpty()) {
+                "$mainUrl/$cleanPath/page/$page/?$query"
+            } else {
+                "$mainUrl/$cleanPath/page/$page/"
+            }
         }
         val document = app.get(url).document
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
 
-        val lastPage = document.select("a.page-numbers:not(.next)")
-            .lastOrNull()?.text()?.trim()?.toIntOrNull() ?: 1
-        val hasNext = page < lastPage
+        val hasNext = document.selectFirst("a.next, a.page-numbers.next") != null
 
         return newHomePageResponse(
             list = HomePageList(
@@ -61,7 +69,9 @@ class Anichin : MainAPI() {
         val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
             ?.ifBlank { rawTitle } ?: rawTitle
 
-        val type = if (href.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
+        val type = if (href.contains("movie", ignoreCase = true) ||
+            selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true
+        ) TvType.Movie else TvType.Anime
 
         return newMovieSearchResponse(seriesTitle, href, type) {
             this.posterUrl = posterUrl
@@ -84,8 +94,8 @@ class Anichin : MainAPI() {
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
 
         // Anichin: episode list ada di halaman episode, bukan series
-        // Ambil dari div.episodelist ul li
-        val episodeList = document.select("div.episodelist ul li")
+        // Ambil dari div.eplister ul li
+        val episodeList = document.select("div.eplister ul li")
 
         val isSeries = episodeList.isNotEmpty()
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
@@ -94,12 +104,11 @@ class Anichin : MainAPI() {
             episodeList.mapNotNull { li ->
                 val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-                val epTitle = li.selectFirst("div.playinfo h3")?.text()?.trim()
-                val epSpan = li.selectFirst("div.playinfo span")?.text()?.trim()
-                // Ambil nomor episode dari span "Eps 02 - April 25, 2026"
-                val epNum = epSpan?.substringAfter("Eps ")?.substringBefore(" -")?.trim()?.toIntOrNull()
+                val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
+                val epNumText = li.selectFirst("div.epl-num")?.text()?.trim()
+                val epNum = epNumText?.toIntOrNull()
                 // Thumbnail per episode tersedia!
-                val epPoster = li.selectFirst("div.thumbnel img")?.run {
+                val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
 
