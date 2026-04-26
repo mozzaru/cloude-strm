@@ -53,7 +53,7 @@ class Donghub : MainAPI() {
                 "$mainUrl/${split[0]}$pagePath?${split[1]}"
             } else {
                 val dataPath = if (request.data.isEmpty()) "" else "${request.data.removeSuffix("/")}/"
-                "$mainUrl/$dataPath$pagePath"
+                "$mainUrl/$dataPath$pagePath".replace("//page/", "/page/")
             }
         }
         val document = app.get(url, headers = baseHeaders).document
