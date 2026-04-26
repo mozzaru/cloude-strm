@@ -11,46 +11,61 @@ class Donghub : MainAPI() {
     override val hasMainPage = true
 
     private val baseHeaders = mapOf(
+        "Referer" to "$mainUrl/",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Upgrade-Insecure-Requests" to "1",
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
         "Cache-Control" to "no-cache",
         "Pragma" to "no-cache",
-        "Referer" to "https://donghub.vip/"
+        "Sec-Ch-Ua" to "\"Not-A.Chromium\";v=\"124\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "Sec-Ch-Ua-Mobile" to "?0",
+        "Sec-Ch-Ua-Platform" to "\"Windows\"",
+        "Sec-Fetch-User" to "?1"
     )
-
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Rilisan Terbaru",
-        "" to "Popular Today",  // homepage
-        "anime/?order=popular" to "Popular",
-        "anime/?status=ongoing&sub=&order=" to "Series Ongoing",
-        "anime/?status=completed&type=" to "Series Completed",
-        "anime/?status=hiatus&order=" to "Series Drop/Hiatus",
-        "anime/?status=&type=movie&order=" to "Movie"
+        "" to "Rilisan Terbaru",
+        "popular-today" to "Populer Hari Ini",
+        "anime/?order=popular" to "Populer",
+        "anime/?status=ongoing&order=update" to "Ongoing",
+        "anime/?status=completed&order=update" to "Completed",
+        "anime/?status=&type=movie&order=update" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) {
-            if (request.data.isEmpty()) mainUrl  // Popular Today = homepage
-            else "$mainUrl/${request.data}"
+            if (request.data == "popular-today") mainUrl else "$mainUrl/${request.data}"
         } else {
-            "$mainUrl/${request.data}&page=$page"
+            if (request.data == "popular-today") return newHomePageResponse(
+                list = HomePageList(name = request.name, list = emptyList(), isHorizontalImages = false),
+                hasNext = false
+            )
+            val pagePath = "page/$page/"
+            if (request.data.contains("?")) {
+                val split = request.data.split("?")
+                "$mainUrl/${split[0]}$pagePath?${split[1]}"
+            } else {
+                val dataPath = if (request.data.isEmpty()) "" else "${request.data.removeSuffix("/")}/"
+                "$mainUrl/$dataPath$pagePath"
+            }
         }
-
         val document = app.get(url, headers = baseHeaders).document
-
-        // Popular Today pakai selector berbeda
-        val items = if (request.data.isEmpty()) {
-            document.select("div.popconslide article").mapNotNull { it.toSearchResult() }
-        } else {
-            document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        val selector = when (request.data) {
+            "popular-today" -> "div.listupd.popularslider article"
+            "" -> "div.listupd.normal article, div.listupd:not(.popularslider) article"
+            else -> "div.listupd article"
         }
 
-        // Popular Today tidak bisa paginate
-        val hasNext = if (request.data.isEmpty()) false
-        else document.selectFirst("div.hpage a.r") != null
+        val items = document.select(selector).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val hasNext = if (request.data == "popular-today") false else
+            document.selectFirst("div.hpage a.r, div.pagination a.next, div.pagination a:contains(Next)") != null
 
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
@@ -97,7 +112,8 @@ class Donghub : MainAPI() {
                 this.posterUrl = posterUrl
             }
         } else {
-            val epNum = selectFirst(".eggepisode")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+            val epText = selectFirst(".eggepisode")?.text() ?: selectFirst(".epx")?.text()
+            val epNum = epText?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
             newAnimeSearchResponse(titleWithStatus, href, type) {
                 this.posterUrl = posterUrl
                 addSub(epNum)
@@ -107,7 +123,7 @@ class Donghub : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = baseHeaders).document
-        return document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        return document.select("div.listupd article").mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
 
@@ -198,12 +214,12 @@ class Donghub : MainAPI() {
                 val iframeSrc = iframe?.attr("src")?.ifBlank { iframe.attr("data-src") }?.trim()
                 if (!iframeSrc.isNullOrBlank()) {
                     val finalUrl = if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
-                    println("🎯 [Anichin] Trying to extract: $finalUrl")
+                    println("🎯 [Donghub] Trying to extract: $finalUrl")
 
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             } catch (e: Exception) {
-                println("❌ [Anichin] Error decoding Base64 or extracting: ${e.message}")
+                println("❌ [Donghub] Error decoding Base64 or extracting: ${e.message}")
             }
         }
 
