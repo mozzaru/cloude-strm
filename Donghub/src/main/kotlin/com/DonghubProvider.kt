@@ -8,5 +8,6 @@ class DonghubProvider: Plugin() {
     override fun load() {
         registerMainAPI(Donghub())
         registerExtractorAPI(InternetArchive())
+        registerExtractorAPI(DtubeExtractor())
     }
 }
