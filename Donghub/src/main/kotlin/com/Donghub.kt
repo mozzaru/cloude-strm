@@ -11,19 +11,18 @@ class Donghub : MainAPI() {
     override val hasMainPage = true
 
     private val baseHeaders = mapOf(
-        "Referer" to "$mainUrl/",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "id-ID,id;q=0.9",
+        "Cache-Control" to "max-age=0",
+        "Upgrade-Insecure-Requests" to "1",
+        "Referer" to "https://www.google.com/",
+        "Sec-Ch-Ua" to "\"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"8\"",
+        "Sec-Ch-Ua-Mobile" to "?1",
+        "Sec-Ch-Ua-Platform" to "\"Android\"",
         "Sec-Fetch-Dest" to "document",
         "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none",
-        "Upgrade-Insecure-Requests" to "1",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
-        "Cache-Control" to "no-cache",
-        "Pragma" to "no-cache",
-        "Sec-Ch-Ua" to "\"Not-A.Chromium\";v=\"124\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
-        "Sec-Ch-Ua-Mobile" to "?0",
-        "Sec-Ch-Ua-Platform" to "\"Windows\"",
+        "Sec-Fetch-Site" to "cross-site",
         "Sec-Fetch-User" to "?1"
     )
     override var lang = "id"
