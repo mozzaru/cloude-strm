@@ -14,25 +14,50 @@ class Anichin : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Rilisan Terbaru",
-        "anime/?status=ongoing&sub=&order=" to "Series Ongoing",
-        "anime/?status=completed&type=" to "Series Completed",
-        "anime/?status=hiatus&order=" to "Series Drop/Hiatus",
-        "anime/?status=&type=movie&order=" to "Movie"
+        ""                                      to "Rilisan Terbaru",
+        "ongoing/"                              to "Series Ongoing",
+        "completed/"                            to "Series Completed",
+        "drop/"                                 to "Series Drop/Hiatus",
+        "anime/?status=&type=Movie&order=update" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) {
-            "$mainUrl/${request.data}"
-        } else {
-            "$mainUrl/${request.data}&page=$page"
+        if (request.data == "") {
+            return getLatestFromHome(page, request.name)
         }
+
+        val url = when {
+            page == 1 -> "$mainUrl/${request.data}"
+            request.data.contains("?") ->
+                "$mainUrl/${request.data}&page=$page"
+            else ->
+                "$mainUrl/${request.data}page/$page/"
+        }
+
         val document = app.get(url).document
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         val hasNext = document.selectFirst("div.hpage a.r") != null
 
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
+            hasNext = hasNext
+        )
+    }
+
+    private suspend fun getLatestFromHome(page: Int, name: String): HomePageResponse {
+        val url = if (page == 1) mainUrl else "$mainUrl/page/$page/"
+        val document = app.get(url).document
+
+        val latestSection = document.selectFirst("div.bixbox:has(div.releases.latesthome)")
+        val items = latestSection
+            ?.select("div.listupd article")
+            ?.mapNotNull { it.toSearchResult() }
+            ?: emptyList()
+
+        val hasNext = document.selectFirst("div.hpage a.r") != null
+
+        return newHomePageResponse(
+            list = HomePageList(name = name, list = items, isHorizontalImages = false),
             hasNext = hasNext
         )
     }
@@ -50,7 +75,6 @@ class Anichin : MainAPI() {
         val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
         val posterUrl = fixUrlNull(posterUrlFixed)
 
-        // Anichin: href adalah episode page, ambil series title dari div.tt
         val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
             ?.ifBlank { rawTitle } ?: rawTitle
 
@@ -78,10 +102,7 @@ class Anichin : MainAPI() {
         }
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
 
-        // Anichin: episode list ada di halaman episode, bukan series
-        // Ambil dari div.eplister ul li
         val episodeList = document.select("div.eplister ul li")
-
         val isSeries = episodeList.isNotEmpty()
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
@@ -92,7 +113,6 @@ class Anichin : MainAPI() {
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
                 val epNumText = li.selectFirst("div.epl-num")?.text()?.trim()
                 val epNum = epNumText?.toIntOrNull()
-                // Thumbnail per episode tersedia!
                 val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
@@ -152,7 +172,6 @@ class Anichin : MainAPI() {
                 if (!iframeSrc.isNullOrBlank()) {
                     val finalUrl = if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
                     println("🎯 [Anichin] Trying to extract: $finalUrl")
-
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             } catch (e: Exception) {
