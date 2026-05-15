@@ -103,18 +103,27 @@ class Anichin : MainAPI() {
         return fixUrlNull(fixed)
     }
 
+    /**
+     * Parse span text format: "Eps 605 - Empat Teknik Pedang - May 15, 2026"
+     * Returns Pair(episodeNumber, episodeTitle)
+     * episodeTitle only contains the theme/subtitle, NOT the episode number.
+     */
     private fun parseEpisodeTitleFromSpan(spanText: String): Pair<Int?, String> {
+        // Format: "Eps NNN - Theme Title - Date" or "Eps NNN - Date"
         val parts = spanText.split(" - ")
-        val numPart = parts.getOrNull(0)?.trim() ?: ""
-        val epNum = Regex("\\d+").find(numPart)?.value?.toIntOrNull()
-        val epTheme = parts.getOrNull(1)?.trim()
-        val title = if (!epTheme.isNullOrBlank() && epNum != null) {
-            "$epNum. $epTheme"
-        } else if (epNum != null) {
-            "Episode $epNum"
-        } else {
-            spanText
-        }
+        val epsPart = parts.getOrNull(0)?.trim() ?: ""
+        val epNum = Regex("\\d+").find(epsPart)?.value?.toIntOrNull()
+
+        // The theme is the second part, but only if it's not a date
+        // Dates look like "May 15, 2026" or "April 2026" etc.
+        val dateRegex = Regex("^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d")
+        val secondPart = parts.getOrNull(1)?.trim()
+        val epTheme = if (secondPart != null && !dateRegex.containsMatchIn(secondPart)) {
+            secondPart
+        } else null
+
+        // Title is ONLY the theme (no episode number prefix to avoid duplication)
+        val title = epTheme?.ifBlank { null } ?: ""
         return Pair(epNum, title)
     }
 
@@ -142,13 +151,13 @@ class Anichin : MainAPI() {
                 val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
-                val (epNum, epTitle) = parseEpisodeTitleFromSpan(spanText)
+                val (epNum, epTheme) = parseEpisodeTitleFromSpan(spanText)
                 val epPoster = li.selectFirst("div.thumbnel img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
 
                 newEpisode(epHref) {
-                    this.name = epTitle
+                    this.name = epTheme.ifBlank { null }
                     this.episode = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
                 }
@@ -178,8 +187,9 @@ class Anichin : MainAPI() {
                 val epHref = fixUrl(a.attr("href"))
                 val epNumRaw = li.selectFirst("div.epl-num")?.text()?.trim() ?: ""
                 val epNum = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
+                // Only use theme title, NOT episode number string
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
-                    ?.ifBlank { null } ?: epNumRaw.ifBlank { "Episode $epNum" }
+                    ?.ifBlank { null }
                 val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
