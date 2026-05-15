@@ -13,6 +13,17 @@ class Anichin : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9",
+        "Cache-Control" to "max-age=0",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Upgrade-Insecure-Requests" to "1",
+    )
+
     override val mainPage = mainPageOf(
         ""                                      to "Rilisan Terbaru",
         "ongoing/"                              to "Series Ongoing",
@@ -32,7 +43,7 @@ class Anichin : MainAPI() {
             else -> "$mainUrl/${request.data}page/$page/"
         }
 
-        val document = app.get(url).document
+        val document = app.get(url, headers = browserHeaders).document
 
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         val hasNext = document.selectFirst("div.hpage a.r") != null
@@ -45,9 +56,11 @@ class Anichin : MainAPI() {
 
     private suspend fun getLatestFromHome(page: Int, name: String): HomePageResponse {
         val url = if (page == 1) mainUrl else "$mainUrl/page/$page/"
-        val document = app.get(url).document
+        val document = app.get(url, headers = browserHeaders).document
 
-        val latestSection = document.selectFirst("div.bixbox:has(div.releases.latesthome)")
+        val latestSection = document.select("div.bixbox.bbnofrm").firstOrNull { box ->
+            box.selectFirst("div.releases.latesthome") != null
+        }
 
         val items = latestSection
             ?.select("div.listupd article")
@@ -109,7 +122,7 @@ class Anichin : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query").document
+        val document = app.get("$mainUrl/?s=$query", headers = browserHeaders).document
         return document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
@@ -119,7 +132,7 @@ class Anichin : MainAPI() {
             url.replace(Regex("-episode-\\d+[^/]*/"), "/")
         } else url
 
-        val document = app.get(seriesUrl).document
+        val document = app.get(seriesUrl, headers = browserHeaders).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
         var poster = document.selectFirst("div.ime > img")?.attr("src").orEmpty()
         if (poster.isEmpty()) {
@@ -184,7 +197,7 @@ class Anichin : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = browserHeaders).document
 
         document.select(".mobius option").forEach { server ->
             val base64 = server.attr("value").trim()
