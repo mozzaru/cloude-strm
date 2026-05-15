@@ -17,7 +17,8 @@ class Anichin : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language" to "id-ID,id;q=0.9",
-        "Cache-Control" to "max-age=0",
+        "Cache-Control" to "no-cache",
+        "Pragma" to "no-cache",
         "Sec-Fetch-Dest" to "document",
         "Sec-Fetch-Mode" to "navigate",
         "Sec-Fetch-Site" to "none",
@@ -25,10 +26,10 @@ class Anichin : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        ""                                      to "Rilisan Terbaru",
-        "ongoing/"                              to "Series Ongoing",
-        "completed/"                            to "Series Completed",
-        "drop/"                                 to "Series Drop/Hiatus",
+        ""                                       to "Rilisan Terbaru",
+        "ongoing/"                               to "Series Ongoing",
+        "completed/"                             to "Series Completed",
+        "drop/"                                  to "Series Drop/Hiatus",
         "anime/?status=&type=Movie&order=update" to "Movie"
     )
 
@@ -44,7 +45,6 @@ class Anichin : MainAPI() {
         }
 
         val document = app.get(url, headers = browserHeaders).document
-
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         val hasNext = document.selectFirst("div.hpage a.r") != null
 
@@ -58,12 +58,12 @@ class Anichin : MainAPI() {
         val url = if (page == 1) mainUrl else "$mainUrl/page/$page/"
         val document = app.get(url, headers = browserHeaders).document
 
-        val latestSection = document.select("div.bixbox.bbnofrm").firstOrNull { box ->
+        val latestSection = document.select("div.bixbox").firstOrNull { box ->
             box.selectFirst("div.releases.latesthome") != null
         }
 
         val items = latestSection
-            ?.select("div.listupd article")
+            ?.select("article.bs")
             ?.mapNotNull { it.toEpisodeSearchResult() }
             ?: emptyList()
 
@@ -79,17 +79,8 @@ class Anichin : MainAPI() {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val rawTitle = aTag.attr("title").ifBlank { aTag.text() }
         val href = fixUrl(aTag.attr("href"))
-        val img = aTag.selectFirst("img")
-
-        val posterUrlRaw = img?.run {
-            attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
-        }.orEmpty()
-        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
-        val posterUrl = fixUrlNull(posterUrlFixed)
-
-        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
-            ?.ifBlank { rawTitle } ?: rawTitle
-
+        val posterUrl = extractPoster(aTag)
+        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim().takeIf { !it.isNullOrBlank() } ?: rawTitle
         val type = if (selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true)
             TvType.Movie else TvType.Anime
 
@@ -102,16 +93,9 @@ class Anichin : MainAPI() {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val rawTitle = aTag.attr("title").ifBlank { aTag.text() }
         val episodeHref = fixUrl(aTag.attr("href"))
-        val img = aTag.selectFirst("img")
+        val posterUrl = extractPoster(aTag)
 
-        val posterUrlRaw = img?.run {
-            attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
-        }.orEmpty()
-        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
-        val posterUrl = fixUrlNull(posterUrlFixed)
-
-        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
-            ?.ifBlank { rawTitle } ?: rawTitle
+        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim().takeIf { !it.isNullOrBlank() } ?: rawTitle
 
         val type = if (selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true)
             TvType.Movie else TvType.Anime
@@ -121,6 +105,13 @@ class Anichin : MainAPI() {
         }
     }
 
+    private fun extractPoster(aTag: Element): String? {
+        val img = aTag.selectFirst("img") ?: return null
+        val raw = img.attr("src").ifBlank { img.attr("data-src") }.ifBlank { img.attr("data-lazy-src") }
+        val fixed = if (raw.startsWith("//")) "https:$raw" else raw
+        return fixUrlNull(fixed)
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = browserHeaders).document
         return document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
@@ -128,7 +119,9 @@ class Anichin : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val seriesUrl = if (url.contains("-episode-")) {
+        val isEpisodeUrl = url.contains("-episode-")
+
+        val seriesUrl = if (isEpisodeUrl) {
             url.replace(Regex("-episode-\\d+[^/]*/"), "/")
         } else url
 
@@ -145,7 +138,7 @@ class Anichin : MainAPI() {
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
         val episodes = if (isSeries) {
-            episodeList.mapNotNull { li ->
+            val parsedEpisodes = episodeList.mapNotNull { li ->
                 val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
@@ -160,7 +153,23 @@ class Anichin : MainAPI() {
                     this.episode = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
                 }
-            }.reversed()
+            }.reversed().toMutableList()
+
+            if (isEpisodeUrl) {
+                val currentEpUrls = parsedEpisodes.map { it.data }.toSet()
+                val fixedUrl = fixUrl(url)
+                if (fixedUrl !in currentEpUrls) {
+                    val epNumFromUrl = Regex("-episode-(\\d+)").find(url)
+                        ?.groupValues?.get(1)?.toIntOrNull()
+                    parsedEpisodes.add(newEpisode(fixedUrl) {
+                        this.name = "Episode $epNumFromUrl"
+                        this.episode = epNumFromUrl
+                        this.posterUrl = poster
+                    })
+                }
+            }
+
+            parsedEpisodes
         } else {
             val firstOption = document.selectFirst(".mobius option")
             val base64 = firstOption?.attr("value")?.trim()
