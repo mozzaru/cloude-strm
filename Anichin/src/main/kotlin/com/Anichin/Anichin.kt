@@ -28,13 +28,12 @@ class Anichin : MainAPI() {
 
         val url = when {
             page == 1 -> "$mainUrl/${request.data}"
-            request.data.contains("?") ->
-                "$mainUrl/${request.data}&page=$page"
-            else ->
-                "$mainUrl/${request.data}page/$page/"
+            request.data.contains("?") -> "$mainUrl/${request.data}&page=$page"
+            else -> "$mainUrl/${request.data}page/$page/"
         }
 
         val document = app.get(url).document
+
         val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         val hasNext = document.selectFirst("div.hpage a.r") != null
 
@@ -49,9 +48,10 @@ class Anichin : MainAPI() {
         val document = app.get(url).document
 
         val latestSection = document.selectFirst("div.bixbox:has(div.releases.latesthome)")
+
         val items = latestSection
             ?.select("div.listupd article")
-            ?.mapNotNull { it.toSearchResult() }
+            ?.mapNotNull { it.toEpisodeSearchResult() }
             ?: emptyList()
 
         val hasNext = document.selectFirst("div.hpage a.r") != null
@@ -71,18 +71,39 @@ class Anichin : MainAPI() {
         val posterUrlRaw = img?.run {
             attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
         }.orEmpty()
-
         val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
         val posterUrl = fixUrlNull(posterUrlFixed)
 
         val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
             ?.ifBlank { rawTitle } ?: rawTitle
 
-        val type = if (href.contains("movie", ignoreCase = true) ||
-            selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true
-        ) TvType.Movie else TvType.Anime
+        val type = if (selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true)
+            TvType.Movie else TvType.Anime
 
         return newMovieSearchResponse(seriesTitle, href, type) {
+            this.posterUrl = posterUrl
+        }
+    }
+
+    private fun Element.toEpisodeSearchResult(): SearchResponse? {
+        val aTag = selectFirst("div.bsx > a") ?: return null
+        val rawTitle = aTag.attr("title").ifBlank { aTag.text() }
+        val episodeHref = fixUrl(aTag.attr("href"))
+        val img = aTag.selectFirst("img")
+
+        val posterUrlRaw = img?.run {
+            attr("src").ifBlank { attr("data-src") }.ifBlank { attr("data-lazy-src") }
+        }.orEmpty()
+        val posterUrlFixed = if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
+        val posterUrl = fixUrlNull(posterUrlFixed)
+
+        val seriesTitle = selectFirst("div.tt")?.ownText()?.trim()
+            ?.ifBlank { rawTitle } ?: rawTitle
+
+        val type = if (selectFirst(".typez")?.text()?.contains("movie", ignoreCase = true) == true)
+            TvType.Movie else TvType.Anime
+
+        return newMovieSearchResponse(seriesTitle, episodeHref, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -94,7 +115,11 @@ class Anichin : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val seriesUrl = if (url.contains("-episode-")) {
+            url.replace(Regex("-episode-\\d+[^/]*/"), "/")
+        } else url
+
+        val document = app.get(seriesUrl).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
         var poster = document.selectFirst("div.ime > img")?.attr("src").orEmpty()
         if (poster.isEmpty()) {
@@ -139,7 +164,7 @@ class Anichin : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            if (playUrl == null) playUrl = url
+            if (playUrl == null) playUrl = seriesUrl
 
             listOf(newEpisode(playUrl) {
                 name = "Movie"
@@ -147,7 +172,7 @@ class Anichin : MainAPI() {
             })
         }
 
-        return newTvSeriesLoadResponse(title, url, tvType, episodes) {
+        return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
             this.posterUrl = poster
             this.plot = description
         }
