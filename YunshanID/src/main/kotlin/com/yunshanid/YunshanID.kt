@@ -81,17 +81,18 @@ class YunshanID : MainAPI() {
     ): Boolean {
         val ep = parseJson<Episode>(data)
 
-        // Main video URL
-        ep.videoUrl?.let { url ->
-            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+        val allUrls = mutableSetOf<String>()
+        ep.videoUrl?.let { allUrls.add(it) }
+        ep.servers?.forEach { server ->
+            server.url?.let { allUrls.add(it) }
+            server.embedUrl?.let { allUrls.add(it) }
+        }
+        ep.downloads?.forEach { download ->
+            download.url?.let { allUrls.add(it) }
         }
 
-        // Alternative servers
-        ep.servers?.forEach { server ->
-            val serverUrl = server.url ?: server.embedUrl
-            if (!serverUrl.isNullOrBlank()) {
-                loadExtractor(serverUrl, "$mainUrl/", subtitleCallback, callback)
-            }
+        allUrls.forEach { url ->
+            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
         }
 
         return true
@@ -136,11 +137,18 @@ class YunshanID : MainAPI() {
         @JsonProperty("ep_number") val epNumber: Int?,
         @JsonProperty("video_url") val videoUrl: String?,
         @JsonProperty("servers") val servers: List<Server>?,
+        @JsonProperty("downloads") val downloads: List<Download>?
     )
 
     data class Server(
         @JsonProperty("name") val name: String?,
         @JsonProperty("url") val url: String?,
         @JsonProperty("embed_url") val embedUrl: String?
+    )
+
+    data class Download(
+        @JsonProperty("resolution") val resolution: String?,
+        @JsonProperty("server_name") val serverName: String?,
+        @JsonProperty("url") val url: String?
     )
 }
