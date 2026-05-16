@@ -15,6 +15,8 @@ class YunshanID : MainAPI() {
     override val mainPage = mainPageOf(
         "latest" to "Rilisan Terbaru",
         "popular" to "Populer",
+        "On-Going" to "Ongoing",
+        "Movie" to "Movie",
         "all" to "Semua Donghua"
     )
 
@@ -25,6 +27,8 @@ class YunshanID : MainAPI() {
         val items = when (request.data) {
             "latest" -> allDonghuas.sortedByDescending { it.lastUpdate }.map { it.toSearchResponse() }
             "popular" -> allDonghuas.sortedByDescending { it.viewCount }.map { it.toSearchResponse() }
+            "On-Going" -> allDonghuas.filter { it.status == "On-Going" }.map { it.toSearchResponse() }
+            "Movie" -> allDonghuas.filter { it.type == "Movie" }.map { it.toSearchResponse() }
             else -> allDonghuas.map { it.toSearchResponse() }
         }
 
@@ -54,9 +58,10 @@ class YunshanID : MainAPI() {
 
         val episodes = detail.episodes?.map { ep ->
             newEpisode(ep) {
-                this.name = "Episode ${ep.epNumber}"
+                this.name = "${ep.epNumber}. ${detail.title} Episode ${ep.epNumber} Subtitle Indonesia"
                 this.episode = ep.epNumber
                 this.data = mapper.writeValueAsString(ep)
+                this.posterUrl = poster
             }
         }?.sortedByDescending { it.episode } ?: emptyList()
 
@@ -92,8 +97,23 @@ class YunshanID : MainAPI() {
 
     private fun DonghuaResponse.toSearchResponse(): SearchResponse {
         val type = if (this.type?.contains("Movie", ignoreCase = true) == true) TvType.Movie else TvType.Anime
-        return newMovieSearchResponse(this.title ?: "", "$mainUrl/api/donghua/${this.id}", type) {
+        val epCount = latestEp ?: 0
+        val isCompleted = status == "Completed"
+        val titleWithTag = when {
+            isCompleted -> "${this.title} (Completed)"
+            else -> this.title ?: ""
+        }
+
+        return newAnimeSearchResponse(titleWithTag, "$mainUrl/api/donghua/${this.id}", type) {
             this.posterUrl = this@toSearchResponse.posterUrl ?: this@toSearchResponse.poster
+            if (isCompleted) {
+                // Cloudstream doesn't have a direct "Completed" label in SearchResponse
+                // but we can add it to the name or use other fields.
+                // For now, epCount is enough.
+                addSub(epCount)
+            } else {
+                addSub(epCount)
+            }
         }
     }
 
@@ -103,6 +123,8 @@ class YunshanID : MainAPI() {
         @JsonProperty("poster_url") val posterUrl: String?,
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("type") val type: String?,
+        @JsonProperty("status") val status: String?,
+        @JsonProperty("latest_ep") val latestEp: Int?,
         @JsonProperty("last_update") val lastUpdate: String?,
         @JsonProperty("view_count") val viewCount: Int?
     )
