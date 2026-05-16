@@ -6,7 +6,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
-// ─── Model JSON dari /api/donghuas ───────────────────────────────────────────
+// ─── Model JSON dari API ───────────────────────────────────────────────────
 
 @Serializable
 data class DonghuaItem(
@@ -68,39 +68,27 @@ class YunshanID : MainAPI() {
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 
-    private val apiHeaders = mapOf(
-        "User-Agent"         to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
-        "Accept"             to "*/*",
-        "Accept-Language"    to "id-ID,id;q=0.9",
-        "Content-Type"       to "application/json",
-        "Sec-Ch-Ua"          to "\"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"8\"",
-        "Sec-Ch-Ua-Mobile"   to "?1",
-        "Sec-Ch-Ua-Platform" to "\"Android\"",
-        "Sec-Fetch-Dest"     to "empty",
-        "Sec-Fetch-Mode"     to "cors",
-        "Sec-Fetch-Site"     to "same-origin",
-        "Referer"            to "https://yunshanid.site/"
-    )
-
-    private val pageHeaders = mapOf(
-        "User-Agent"                to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
-        "Accept"                    to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language"           to "id-ID,id;q=0.9",
-        "Upgrade-Insecure-Requests" to "1",
-        "Sec-Ch-Ua"                 to "\"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"8\"",
-        "Sec-Ch-Ua-Mobile"          to "?1",
-        "Sec-Ch-Ua-Platform"        to "\"Android\"",
-        "Sec-Fetch-Dest"            to "document",
-        "Sec-Fetch-Mode"            to "navigate",
-        "Sec-Fetch-Site"            to "same-origin",
-        "Referer"                   to "https://yunshanid.site/"
+    private val commonHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "Referer" to "https://yunshanid.site/",
+        "Accept" to "*/*"
     )
 
     // ─── Fetch semua donghua dari API ─────────────────────────────────────────
     private suspend fun fetchAllDonghuas(): List<DonghuaItem> {
+        val url = "$mainUrl/api/donghuas?t=${System.currentTimeMillis()}"
         return try {
-            val resp = app.get("$mainUrl/api/donghuas", headers = apiHeaders)
-            json.decodeFromString<List<DonghuaItem>>(resp.text)
+            val resp = app.get(url, headers = commonHeaders, timeout = 60)
+            if (resp.code != 200) {
+                println("⚠️ [YunshanID] API returned code ${resp.code}")
+            }
+            val text = resp.text
+            if (text.isBlank()) return emptyList()
+
+            // Debug print first 100 chars
+            // println("📢 [YunshanID] API Response: ${text.take(100)}")
+
+            json.decodeFromString<List<DonghuaItem>>(text)
         } catch (e: Exception) {
             println("❌ [YunshanID] fetchAllDonghuas: ${e.message}")
             emptyList()
@@ -112,11 +100,17 @@ class YunshanID : MainAPI() {
         val id    = this.id ?: return null
         val title = this.title?.trim()?.ifBlank { null } ?: return null
         val url   = "$mainUrl/synopsis/$id"
-        val type  = if (this.type?.lowercase() == "movie") TvType.Movie else TvType.Anime
+
+        val isMovie = this.type?.contains("movie", ignoreCase = true) == true
+        val type = if (isMovie) TvType.Movie else TvType.Anime
+
+        val poster = this.posterUrl ?: this.poster
 
         return newAnimeSearchResponse(title, url, type) {
-            this.posterUrl = this@toSearchResponse.posterUrl ?: this@toSearchResponse.poster
-            addSub(latestEp)
+            this.posterUrl = fixUrlNull(poster)
+            if (type == TvType.Anime) {
+                addSub(latestEp)
+            }
         }
     }
 
@@ -132,11 +126,13 @@ class YunshanID : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val all = fetchAllDonghuas()
-        if (all.isEmpty()) return newHomePageResponse(
-            list = HomePageList(request.name, emptyList(), false), hasNext = false
-        )
+        if (all.isEmpty()) {
+            return newHomePageResponse(
+                list = HomePageList(request.name, emptyList(), false), hasNext = false
+            )
+        }
 
-        val pageSize = 20
+        val pageSize = 24
         val offset   = (page - 1) * pageSize
 
         val filtered: List<DonghuaItem> = when (request.data) {
@@ -145,19 +141,19 @@ class YunshanID : MainAPI() {
             "popular" -> all.sortedByDescending { it.viewCount ?: 0 }
 
             "ongoing" -> all
-                .filter { it.status?.lowercase()?.contains("going") == true }
+                .filter { it.status?.contains("going", ignoreCase = true) == true }
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "completed" -> all
-                .filter { it.status?.lowercase()?.contains("complete") == true }
+                .filter { it.status?.contains("complete", ignoreCase = true) == true || it.status?.contains("selesai", ignoreCase = true) == true }
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "hiatus" -> all
-                .filter { it.status?.lowercase()?.contains("hiatus") == true }
+                .filter { it.status?.contains("hiatus", ignoreCase = true) == true || it.status?.contains("tunda", ignoreCase = true) == true }
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "movie" -> all
-                .filter { it.type?.lowercase() == "movie" }
+                .filter { it.type?.contains("movie", ignoreCase = true) == true }
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             else -> all
@@ -186,26 +182,27 @@ class YunshanID : MainAPI() {
 
     // ─── DETAIL HALAMAN ───────────────────────────────────────────────────────
     override suspend fun load(url: String): LoadResponse {
-        val id   = url.substringAfterLast("/").toIntOrNull() ?: throw Exception("Invalid URL: $url")
+        val id = url.substringAfterLast("/").toIntOrNull() ?: throw Exception("Invalid URL: $url")
+        val detailUrl = "$mainUrl/api/donghua/$id?t=${System.currentTimeMillis()}"
+
         val item = try {
-            val resp = app.get("$mainUrl/api/donghua/$id", headers = apiHeaders)
+            val resp = app.get(detailUrl, headers = commonHeaders, timeout = 60)
             json.decodeFromString<DonghuaItem>(resp.text)
         } catch (e: Exception) {
-            println("❌ [YunshanID] load: ${e.message}")
-            // Fallback to fetchAll if single fetch fails
+            println("❌ [YunshanID] load details failed: ${e.message}")
             fetchAllDonghuas().find { it.id == id } ?: throw Exception("Donghua not found: $id")
         }
 
-        val title   = item.title?.trim() ?: "Unknown"
-        val isMovie = item.type?.lowercase() == "movie"
+        val title = item.title?.trim() ?: "Unknown"
+        val isMovie = item.type?.contains("movie", ignoreCase = true) == true
+        val type = if (isMovie) TvType.Movie else TvType.Anime
 
         val showStatus = when {
-            item.status?.lowercase()?.contains("going") == true -> ShowStatus.Ongoing
-            item.status?.lowercase()?.contains("complete") == true -> ShowStatus.Completed
+            item.status?.contains("going", ignoreCase = true) == true -> ShowStatus.Ongoing
+            item.status?.contains("complete", ignoreCase = true) == true -> ShowStatus.Completed
             else -> null
         }
 
-        // Episode list ascending (ep 1, ep 2, …)
         val sortedEps = (item.episodes ?: emptyList())
             .sortedBy { it.epNumber ?: it.episodeNumber ?: 0 }
 
@@ -216,8 +213,8 @@ class YunshanID : MainAPI() {
                 "$mainUrl/episode/${sortedEps.first().id}"
             else url
 
-            newMovieLoadResponse(title, url, TvType.Movie, epUrl) {
-                this.posterUrl = poster
+            newMovieLoadResponse(title, url, type, epUrl) {
+                this.posterUrl = fixUrlNull(poster)
                 this.plot      = item.synopsis
             }
         } else {
@@ -228,22 +225,21 @@ class YunshanID : MainAPI() {
                         this.name      = ep.title?.takeIf { it.isNotBlank() }
                             ?: "Episode ${ep.epNumber ?: ep.episodeNumber}"
                         this.episode   = ep.epNumber ?: ep.episodeNumber
-                        this.posterUrl = poster
+                        this.posterUrl = fixUrlNull(poster)
                     }
                 }
             } else {
-                // Fallback use episodes_map if episodes list is empty
                 item.episodesMap?.mapIndexed { index, epId ->
                     newEpisode("$mainUrl/episode/$epId") {
                         this.name    = "Episode ${index + 1}"
                         this.episode = index + 1
-                        this.posterUrl = poster
+                        this.posterUrl = fixUrlNull(poster)
                     }
                 } ?: emptyList()
             }
 
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl  = poster
+            newTvSeriesLoadResponse(title, url, type, episodes) {
+                this.posterUrl  = fixUrlNull(poster)
                 this.plot       = item.synopsis
                 this.showStatus = showStatus
             }
@@ -260,23 +256,15 @@ class YunshanID : MainAPI() {
         val epId = data.substringAfterLast("/").toIntOrNull()
             ?: return loadLinksFromPage(data, subtitleCallback, callback)
 
-        // Cari donghua_id dari halaman episode (biasanya ada di breadcrumb atau meta)
-        // Namun karena kita sudah punya epId, kita bisa coba cari di all donghuas atau detail donghua
-        // Strategi: Cari di semua donghua (fetchAll) atau iterate detail (mahal tapi akurat)
-        // Lebih baik cari videoUrl dari detail API /api/donghua/{id} jika kita tau id-nya.
-        // Karena epId tidak memberi kita donghuaId langsung, kita cari di fetchAllDonghuas().
-
         try {
             val all = fetchAllDonghuas()
             for (d in all) {
-                // episodes list di fetchAll sekarang null atau partial, tapi mari kita cek
                 d.episodes?.find { it.id == epId }?.let { ep ->
                     if (processEpisode(ep, data, subtitleCallback, callback)) return true
                 }
 
-                // Jika epId ada di episodesMap, maka ini donghuanya
                 if (d.episodesMap?.contains(epId) == true) {
-                    val resp = app.get("$mainUrl/api/donghua/${d.id}", headers = apiHeaders)
+                    val resp = app.get("$mainUrl/api/donghua/${d.id}", headers = commonHeaders)
                     val detail = json.decodeFromString<DonghuaItem>(resp.text)
                     detail.episodes?.find { it.id == epId }?.let { ep ->
                         if (processEpisode(ep, data, subtitleCallback, callback)) return true
@@ -287,7 +275,6 @@ class YunshanID : MainAPI() {
             println("⚠️ [YunshanID] loadLinks search: ${e.message}")
         }
 
-        // Fallback parse HTML halaman episode
         return loadLinksFromPage(data, subtitleCallback, callback)
     }
 
@@ -301,7 +288,6 @@ class YunshanID : MainAPI() {
         val v = ep.videoUrl?.trim()
         if (!v.isNullOrBlank()) {
             val final = normalizeUrl(v)
-            println("🎯 [YunshanID] videoUrl → $final")
             if (loadExtractor(final, referer, subtitleCallback, callback)) {
                 found = true
             }
@@ -311,7 +297,6 @@ class YunshanID : MainAPI() {
             val sUrl = server.embedUrl ?: server.url
             if (!sUrl.isNullOrBlank()) {
                 val final = normalizeUrl(sUrl)
-                println("🎯 [YunshanID] server ${server.name} → $final")
                 if (loadExtractor(final, referer, subtitleCallback, callback)) {
                     found = true
                 }
@@ -326,28 +311,23 @@ class YunshanID : MainAPI() {
         else                   -> "$mainUrl$url"
     }
 
-    // ─── Fallback parse HTML ──────────────────────────────────────────────────
     private suspend fun loadLinksFromPage(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val doc = app.get(url, headers = pageHeaders).document
-
-            // Cari iframe
+            val doc = app.get(url, headers = commonHeaders).document
             val iframeSrc = doc.selectFirst("iframe")?.let { f ->
                 f.attr("src").ifBlank { f.attr("data-src") }
             }?.trim()
 
             if (!iframeSrc.isNullOrBlank()) {
                 val final = normalizeUrl(iframeSrc)
-                println("🎯 [YunshanID] iframe → $final")
                 loadExtractor(final, url, subtitleCallback, callback)
                 return true
             }
 
-            // Cari di script
             val scripts = doc.select("script").joinToString("\n") { it.html() }
             val patterns = listOf(
                 Regex("""videoUrl\s*[:=]\s*["'`]([^"'`\s]+)"""),
@@ -359,15 +339,11 @@ class YunshanID : MainAPI() {
             for (p in patterns) {
                 val found = p.find(scripts)?.groupValues?.getOrNull(1)?.trim()
                     ?.takeIf { it.length > 10 } ?: continue
-                println("🎯 [YunshanID] script → $found")
                 loadExtractor(found, url, subtitleCallback, callback)
                 return true
             }
-
-            println("❌ [YunshanID] No video at $url")
             false
         } catch (e: Exception) {
-            println("❌ [YunshanID] loadLinksFromPage: ${e.message}")
             false
         }
     }
