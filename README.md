@@ -1,6 +1,6 @@
 # 🎯 Mozzaru Cloudstream Plugin Server
 
-**Shortcode**: `mozzaru`
+**Shortcode**: `mozzarurepo`
 
 ---
 
@@ -61,4 +61,4 @@ If you believe content is violating copyright laws, please contact the **actual 
 
 ---
 
-**Thank You for using Phisher Repo!**
+**Thank You for using mozzaru Repo!**
