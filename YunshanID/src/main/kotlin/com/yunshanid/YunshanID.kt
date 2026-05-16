@@ -68,27 +68,27 @@ class YunshanID : MainAPI() {
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 
-    private val commonHeaders = mapOf(
+    private val apiHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "Accept" to "application/json, text/plain, */*",
         "Referer" to "https://yunshanid.site/",
-        "Accept" to "*/*"
+        "Origin" to "https://yunshanid.site",
+        "Sec-Fetch-Dest" to "empty",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Site" to "same-origin"
     )
 
     // ─── Fetch semua donghua dari API ─────────────────────────────────────────
     private suspend fun fetchAllDonghuas(): List<DonghuaItem> {
-        val url = "$mainUrl/api/donghuas?t=${System.currentTimeMillis()}"
+        val url = "$mainUrl/api/donghuas"
         return try {
-            val resp = app.get(url, headers = commonHeaders, timeout = 60)
+            val resp = app.get(url, headers = apiHeaders, timeout = 30)
             if (resp.code != 200) {
                 println("⚠️ [YunshanID] API returned code ${resp.code}")
+                return emptyList()
             }
-            val text = resp.text
-            if (text.isBlank()) return emptyList()
-
-            // Debug print first 100 chars
-            // println("📢 [YunshanID] API Response: ${text.take(100)}")
-
-            json.decodeFromString<List<DonghuaItem>>(text)
+            if (resp.text.isBlank()) return emptyList()
+            json.decodeFromString<List<DonghuaItem>>(resp.text)
         } catch (e: Exception) {
             println("❌ [YunshanID] fetchAllDonghuas: ${e.message}")
             emptyList()
@@ -108,9 +108,7 @@ class YunshanID : MainAPI() {
 
         return newAnimeSearchResponse(title, url, type) {
             this.posterUrl = fixUrlNull(poster)
-            if (type == TvType.Anime) {
-                addSub(latestEp)
-            }
+            if (latestEp != null) addSub(latestEp)
         }
     }
 
@@ -149,7 +147,7 @@ class YunshanID : MainAPI() {
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "hiatus" -> all
-                .filter { it.status?.contains("hiatus", ignoreCase = true) == true || it.status?.contains("tunda", ignoreCase = true) == true }
+                .filter { it.status?.contains("hiatus", ignoreCase = true) == true }
                 .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "movie" -> all
@@ -182,14 +180,13 @@ class YunshanID : MainAPI() {
 
     // ─── DETAIL HALAMAN ───────────────────────────────────────────────────────
     override suspend fun load(url: String): LoadResponse {
-        val id = url.substringAfterLast("/").toIntOrNull() ?: throw Exception("Invalid URL: $url")
-        val detailUrl = "$mainUrl/api/donghua/$id?t=${System.currentTimeMillis()}"
+        val id   = url.removeSuffix("/").substringAfterLast("/").toIntOrNull() ?: throw Exception("Invalid URL: $url")
+        val detailUrl = "$mainUrl/api/donghua/$id"
 
         val item = try {
-            val resp = app.get(detailUrl, headers = commonHeaders, timeout = 60)
+            val resp = app.get(detailUrl, headers = apiHeaders, timeout = 30)
             json.decodeFromString<DonghuaItem>(resp.text)
         } catch (e: Exception) {
-            println("❌ [YunshanID] load details failed: ${e.message}")
             fetchAllDonghuas().find { it.id == id } ?: throw Exception("Donghua not found: $id")
         }
 
@@ -253,21 +250,17 @@ class YunshanID : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val epId = data.substringAfterLast("/").toIntOrNull()
-            ?: return loadLinksFromPage(data, subtitleCallback, callback)
+        val epId = data.removeSuffix("/").substringAfterLast("/").toIntOrNull()
+            ?: return false
 
         try {
             val all = fetchAllDonghuas()
             for (d in all) {
-                d.episodes?.find { it.id == epId }?.let { ep ->
-                    if (processEpisode(ep, data, subtitleCallback, callback)) return true
-                }
-
                 if (d.episodesMap?.contains(epId) == true) {
-                    val resp = app.get("$mainUrl/api/donghua/${d.id}", headers = commonHeaders)
+                    val resp = app.get("$mainUrl/api/donghua/${d.id}", headers = apiHeaders)
                     val detail = json.decodeFromString<DonghuaItem>(resp.text)
                     detail.episodes?.find { it.id == epId }?.let { ep ->
-                        if (processEpisode(ep, data, subtitleCallback, callback)) return true
+                        return processEpisode(ep, data, subtitleCallback, callback)
                     }
                 }
             }
@@ -275,7 +268,7 @@ class YunshanID : MainAPI() {
             println("⚠️ [YunshanID] loadLinks search: ${e.message}")
         }
 
-        return loadLinksFromPage(data, subtitleCallback, callback)
+        return false
     }
 
     private suspend fun processEpisode(
@@ -287,8 +280,7 @@ class YunshanID : MainAPI() {
         var found = false
         val v = ep.videoUrl?.trim()
         if (!v.isNullOrBlank()) {
-            val final = normalizeUrl(v)
-            if (loadExtractor(final, referer, subtitleCallback, callback)) {
+            if (loadExtractor(normalizeUrl(v), referer, subtitleCallback, callback)) {
                 found = true
             }
         }
@@ -296,8 +288,7 @@ class YunshanID : MainAPI() {
         ep.servers?.forEach { server ->
             val sUrl = server.embedUrl ?: server.url
             if (!sUrl.isNullOrBlank()) {
-                val final = normalizeUrl(sUrl)
-                if (loadExtractor(final, referer, subtitleCallback, callback)) {
+                if (loadExtractor(normalizeUrl(sUrl), referer, subtitleCallback, callback)) {
                     found = true
                 }
             }
@@ -309,42 +300,5 @@ class YunshanID : MainAPI() {
         url.startsWith("//")   -> "https:$url"
         url.startsWith("http") -> url
         else                   -> "$mainUrl$url"
-    }
-
-    private suspend fun loadLinksFromPage(
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        return try {
-            val doc = app.get(url, headers = commonHeaders).document
-            val iframeSrc = doc.selectFirst("iframe")?.let { f ->
-                f.attr("src").ifBlank { f.attr("data-src") }
-            }?.trim()
-
-            if (!iframeSrc.isNullOrBlank()) {
-                val final = normalizeUrl(iframeSrc)
-                loadExtractor(final, url, subtitleCallback, callback)
-                return true
-            }
-
-            val scripts = doc.select("script").joinToString("\n") { it.html() }
-            val patterns = listOf(
-                Regex("""videoUrl\s*[:=]\s*["'`]([^"'`\s]+)"""),
-                Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
-                Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
-                Regex("""file\s*:\s*["'`](https?://[^"'`\s]+)"""),
-                Regex("""src\s*:\s*["'`](https?://[^"'`\s]+)""")
-            )
-            for (p in patterns) {
-                val found = p.find(scripts)?.groupValues?.getOrNull(1)?.trim()
-                    ?.takeIf { it.length > 10 } ?: continue
-                loadExtractor(found, url, subtitleCallback, callback)
-                return true
-            }
-            false
-        } catch (e: Exception) {
-            false
-        }
     }
 }
