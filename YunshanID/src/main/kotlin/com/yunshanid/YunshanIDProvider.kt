@@ -7,8 +7,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class YunshanIDProvider: Plugin() {
     override fun load() {
         registerMainAPI(YunshanID())
-        registerExtractorAPI(Dailymotion())
         registerExtractorAPI(GdriveExtractor())
-        registerExtractorAPI(OkRu())
     }
 }
