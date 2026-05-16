@@ -16,6 +16,7 @@ class YunshanID : MainAPI() {
         "latest" to "Rilisan Terbaru",
         "popular" to "Populer",
         "On-Going" to "Ongoing",
+        "Completed" to "Completed",
         "Movie" to "Movie",
         "all" to "Semua Donghua"
     )
@@ -28,6 +29,7 @@ class YunshanID : MainAPI() {
             "latest" -> allDonghuas.sortedByDescending { it.lastUpdate }.map { it.toSearchResponse() }
             "popular" -> allDonghuas.sortedByDescending { it.viewCount }.map { it.toSearchResponse() }
             "On-Going" -> allDonghuas.filter { it.status == "On-Going" }.map { it.toSearchResponse() }
+            "Completed" -> allDonghuas.filter { it.status == "Completed" }.map { it.toSearchResponse() }
             "Movie" -> allDonghuas.filter { it.type == "Movie" }.map { it.toSearchResponse() }
             else -> allDonghuas.map { it.toSearchResponse() }
         }
@@ -99,21 +101,11 @@ class YunshanID : MainAPI() {
         val type = if (this.type?.contains("Movie", ignoreCase = true) == true) TvType.Movie else TvType.Anime
         val epCount = latestEp ?: 0
         val isCompleted = status == "Completed"
-        val titleWithTag = when {
-            isCompleted -> "${this.title} (Completed)"
-            else -> this.title ?: ""
-        }
+        val titleWithTag = if (isCompleted) "${this.title} (Completed)" else (this.title ?: "")
 
         return newAnimeSearchResponse(titleWithTag, "$mainUrl/api/donghua/${this.id}", type) {
             this.posterUrl = this@toSearchResponse.posterUrl ?: this@toSearchResponse.poster
-            if (isCompleted) {
-                // Cloudstream doesn't have a direct "Completed" label in SearchResponse
-                // but we can add it to the name or use other fields.
-                // For now, epCount is enough.
-                addSub(epCount)
-            } else {
-                addSub(epCount)
-            }
+            addSub(epCount)
         }
     }
 
