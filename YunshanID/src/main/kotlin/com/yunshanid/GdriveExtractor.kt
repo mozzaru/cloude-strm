@@ -32,14 +32,23 @@ class GdriveExtractor : ExtractorApi() {
         val fileId = Regex("/file/d/([^/]+)").find(url)?.groupValues?.get(1)
             ?: Regex("id=([^&]+)").find(url)?.groupValues?.get(1)
 
-        val finalUrl = if (fileId != null) {
+        var finalUrl = if (fileId != null) {
             "https://drive.google.com/uc?id=$fileId&export=download"
         } else {
             url
         }
 
-        val response = app.get(url, headers = headers)
+        val response = app.get(finalUrl, headers = headers)
         val document = response.text
+
+        // Handle virus scan warning
+        if (document.contains("confirm=")) {
+            val confirm = Regex("confirm=([^&\"\\s]+)").find(document)?.groupValues?.get(1)
+            if (confirm != null) {
+                finalUrl += "&confirm=$confirm"
+            }
+        }
+
         val map = Regex("\"fmt_stream_map\":\"(.*?)\"").find(document)?.groupValues?.get(1)
 
         if (map != null) {
@@ -70,6 +79,7 @@ class GdriveExtractor : ExtractorApi() {
                 }
             }
         } else {
+            // Fallback to the direct link (possibly with confirm token)
             callback.invoke(
                 newExtractorLink(
                     this.name,
