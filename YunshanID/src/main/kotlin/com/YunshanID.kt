@@ -2,6 +2,7 @@ package com.yunshanid
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
@@ -9,28 +10,49 @@ import kotlinx.serialization.json.*
 
 @Serializable
 data class DonghuaItem(
-    val id: Int?              = null,
-    val title: String?        = null,
-    val slug: String?         = null,
-    val poster: String?       = null,
-    val synopsis: String?     = null,
-    val status: String?       = null,
-    val type: String?         = null,
-    val totalEpisodes: Int?   = null,
-    val views: Int?           = null,
-    val updatedAt: String?    = null,
-    val createdAt: String?    = null,
+    val id: Int?                    = null,
+    val title: String?              = null,
+    val slug: String?               = null,
+    @SerialName("poster_url")
+    val posterUrl: String?          = null,
+    val poster: String?             = null,
+    val synopsis: String?           = null,
+    val status: String?             = null,
+    val type: String?               = null,
+    @SerialName("latest_ep")
+    val latestEp: Int?              = null,
+    @SerialName("view_count")
+    val viewCount: Int?             = null,
+    @SerialName("last_update")
+    val lastUpdate: String?         = null,
+    val updatedAt: String?          = null,
+    val createdAt: String?          = null,
+    @SerialName("episodes_map")
+    val episodesMap: List<Int>?     = null,
     val episodes: List<EpisodeItem>? = null
 )
 
 @Serializable
 data class EpisodeItem(
-    val id: Int?            = null,
-    val episodeNumber: Int? = null,
-    val title: String?      = null,
-    val videoUrl: String?   = null,
-    val createdAt: String?  = null,
-    val views: Int?         = null
+    val id: Int?                    = null,
+    @SerialName("ep_number")
+    val epNumber: Int?              = null,
+    val episodeNumber: Int?         = null, // legacy
+    val title: String?              = null,
+    @SerialName("video_url")
+    val videoUrl: String?           = null,
+    val servers: List<ServerItem>?  = null,
+    val createdAt: String?          = null,
+    @SerialName("view_count")
+    val viewCount: Int?             = null
+)
+
+@Serializable
+data class ServerItem(
+    val name: String?       = null,
+    val url: String?        = null,
+    @SerialName("embed_url")
+    val embedUrl: String?   = null
 )
 
 class YunshanID : MainAPI() {
@@ -92,12 +114,8 @@ class YunshanID : MainAPI() {
         val url   = "$mainUrl/synopsis/$id"
         val type  = if (this.type?.lowercase() == "movie") TvType.Movie else TvType.Anime
 
-        val latestEp = this.episodes
-            ?.maxByOrNull { it.episodeNumber ?: 0 }
-            ?.episodeNumber
-
         return newAnimeSearchResponse(title, url, type) {
-            this.posterUrl = this@toSearchResponse.poster
+            this.posterUrl = this@toSearchResponse.posterUrl ?: this@toSearchResponse.poster
             addSub(latestEp)
         }
     }
@@ -121,35 +139,26 @@ class YunshanID : MainAPI() {
         val pageSize = 20
         val offset   = (page - 1) * pageSize
 
-        // Helper: timestamp episode terbaru dalam suatu series
-        fun DonghuaItem.latestEpTimestamp(): String =
-            episodes?.maxByOrNull { ep ->
-                ep.createdAt ?: ep.id?.toString() ?: ""
-            }?.createdAt ?: updatedAt ?: createdAt ?: ""
-
         val filtered: List<DonghuaItem> = when (request.data) {
-            // FRESH UPDATE: urut berdasarkan episode.createdAt terbaru
-            "latest" -> all
-                .filter { it.episodes?.isNotEmpty() == true }
-                .sortedByDescending { it.latestEpTimestamp() }
+            "latest" -> all.sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
-            "popular" -> all.sortedByDescending { it.views ?: 0 }
+            "popular" -> all.sortedByDescending { it.viewCount ?: 0 }
 
             "ongoing" -> all
-                .filter { it.status?.lowercase() == "ongoing" }
-                .sortedByDescending { it.latestEpTimestamp() }
+                .filter { it.status?.lowercase()?.contains("going") == true }
+                .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "completed" -> all
-                .filter { it.status?.lowercase() == "completed" }
-                .sortedByDescending { it.updatedAt ?: "" }
+                .filter { it.status?.lowercase()?.contains("complete") == true }
+                .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "hiatus" -> all
-                .filter { it.status?.lowercase() == "hiatus" }
-                .sortedByDescending { it.updatedAt ?: "" }
+                .filter { it.status?.lowercase()?.contains("hiatus") == true }
+                .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             "movie" -> all
                 .filter { it.type?.lowercase() == "movie" }
-                .sortedByDescending { it.updatedAt ?: "" }
+                .sortedByDescending { it.lastUpdate ?: it.updatedAt ?: it.createdAt ?: "" }
 
             else -> all
         }
@@ -171,51 +180,70 @@ class YunshanID : MainAPI() {
                 it.title?.lowercase()?.contains(q) == true ||
                 it.slug?.lowercase()?.contains(q) == true
             }
-            .sortedByDescending { it.views ?: 0 }
+            .sortedByDescending { it.viewCount ?: 0 }
             .mapNotNull { it.toSearchResponse() }
     }
 
     // ─── DETAIL HALAMAN ───────────────────────────────────────────────────────
     override suspend fun load(url: String): LoadResponse {
-        val id   = url.substringAfterLast("/").toIntOrNull()
-        val item = fetchAllDonghuas().find { it.id == id }
-            ?: return newMovieLoadResponse("Unknown", url, TvType.Anime, url)
+        val id   = url.substringAfterLast("/").toIntOrNull() ?: throw Exception("Invalid URL: $url")
+        val item = try {
+            val resp = app.get("$mainUrl/api/donghua/$id", headers = apiHeaders)
+            json.decodeFromString<DonghuaItem>(resp.text)
+        } catch (e: Exception) {
+            println("❌ [YunshanID] load: ${e.message}")
+            // Fallback to fetchAll if single fetch fails
+            fetchAllDonghuas().find { it.id == id } ?: throw Exception("Donghua not found: $id")
+        }
 
         val title   = item.title?.trim() ?: "Unknown"
         val isMovie = item.type?.lowercase() == "movie"
 
-        val showStatus = when (item.status?.lowercase()) {
-            "ongoing"   -> ShowStatus.Ongoing
-            "completed" -> ShowStatus.Completed
-            else        -> null
+        val showStatus = when {
+            item.status?.lowercase()?.contains("going") == true -> ShowStatus.Ongoing
+            item.status?.lowercase()?.contains("complete") == true -> ShowStatus.Completed
+            else -> null
         }
 
         // Episode list ascending (ep 1, ep 2, …)
         val sortedEps = (item.episodes ?: emptyList())
-            .sortedBy { it.episodeNumber ?: 0 }
+            .sortedBy { it.epNumber ?: it.episodeNumber ?: 0 }
 
-        return if (isMovie || sortedEps.isEmpty()) {
+        val poster = item.posterUrl ?: item.poster
+
+        return if (isMovie || (sortedEps.isEmpty() && item.episodesMap.isNullOrEmpty())) {
             val epUrl = if (sortedEps.isNotEmpty())
                 "$mainUrl/episode/${sortedEps.first().id}"
             else url
 
             newMovieLoadResponse(title, url, TvType.Movie, epUrl) {
-                this.posterUrl = item.poster
+                this.posterUrl = poster
                 this.plot      = item.synopsis
             }
         } else {
-            val episodes = sortedEps.mapNotNull { ep ->
-                val epId = ep.id ?: return@mapNotNull null
-                newEpisode("$mainUrl/episode/$epId") {
-                    this.name      = ep.title?.takeIf { it.isNotBlank() }
-                        ?: "Episode ${ep.episodeNumber}"
-                    this.episode   = ep.episodeNumber
-                    this.posterUrl = item.poster
+            val episodes = if (sortedEps.isNotEmpty()) {
+                sortedEps.mapNotNull { ep ->
+                    val epId = ep.id ?: return@mapNotNull null
+                    newEpisode("$mainUrl/episode/$epId") {
+                        this.name      = ep.title?.takeIf { it.isNotBlank() }
+                            ?: "Episode ${ep.epNumber ?: ep.episodeNumber}"
+                        this.episode   = ep.epNumber ?: ep.episodeNumber
+                        this.posterUrl = poster
+                    }
                 }
+            } else {
+                // Fallback use episodes_map if episodes list is empty
+                item.episodesMap?.mapIndexed { index, epId ->
+                    newEpisode("$mainUrl/episode/$epId") {
+                        this.name    = "Episode ${index + 1}"
+                        this.episode = index + 1
+                        this.posterUrl = poster
+                    }
+                } ?: emptyList()
             }
 
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl  = item.poster
+                this.posterUrl  = poster
                 this.plot       = item.synopsis
                 this.showStatus = showStatus
             }
@@ -232,43 +260,64 @@ class YunshanID : MainAPI() {
         val epId = data.substringAfterLast("/").toIntOrNull()
             ?: return loadLinksFromPage(data, subtitleCallback, callback)
 
-        // 1. Coba /api/episodes/{id} langsung
-        try {
-            val ep = json.decodeFromString<EpisodeItem>(
-                app.get("$mainUrl/api/episodes/$epId", headers = apiHeaders).text
-            )
-            val v = ep.videoUrl?.trim()
-            if (!v.isNullOrBlank()) {
-                val final = normalizeUrl(v)
-                println("🎯 [YunshanID] /api/episodes/$epId → $final")
-                loadExtractor(final, data, subtitleCallback, callback)
-                return true
-            }
-        } catch (e: Exception) {
-            println("⚠️ [YunshanID] /api/episodes/$epId: ${e.message}")
-        }
+        // Cari donghua_id dari halaman episode (biasanya ada di breadcrumb atau meta)
+        // Namun karena kita sudah punya epId, kita bisa coba cari di all donghuas atau detail donghua
+        // Strategi: Cari di semua donghua (fetchAll) atau iterate detail (mahal tapi akurat)
+        // Lebih baik cari videoUrl dari detail API /api/donghua/{id} jika kita tau id-nya.
+        // Karena epId tidak memberi kita donghuaId langsung, kita cari di fetchAllDonghuas().
 
-        // 2. Coba ambil dari data inline /api/donghuas
         try {
-            outer@ for (donghua in fetchAllDonghuas()) {
-                for (ep in (donghua.episodes ?: emptyList())) {
-                    if (ep.id != epId) continue
-                    val v = ep.videoUrl?.trim()
-                    if (!v.isNullOrBlank()) {
-                        val final = normalizeUrl(v)
-                        println("🎯 [YunshanID] donghuas-inline → $final")
-                        loadExtractor(final, data, subtitleCallback, callback)
-                        return true
+            val all = fetchAllDonghuas()
+            for (d in all) {
+                // episodes list di fetchAll sekarang null atau partial, tapi mari kita cek
+                d.episodes?.find { it.id == epId }?.let { ep ->
+                    if (processEpisode(ep, data, subtitleCallback, callback)) return true
+                }
+
+                // Jika epId ada di episodesMap, maka ini donghuanya
+                if (d.episodesMap?.contains(epId) == true) {
+                    val resp = app.get("$mainUrl/api/donghua/${d.id}", headers = apiHeaders)
+                    val detail = json.decodeFromString<DonghuaItem>(resp.text)
+                    detail.episodes?.find { it.id == epId }?.let { ep ->
+                        if (processEpisode(ep, data, subtitleCallback, callback)) return true
                     }
-                    break@outer
                 }
             }
         } catch (e: Exception) {
-            println("⚠️ [YunshanID] inline search: ${e.message}")
+            println("⚠️ [YunshanID] loadLinks search: ${e.message}")
         }
 
-        // 3. Fallback parse HTML halaman episode
+        // Fallback parse HTML halaman episode
         return loadLinksFromPage(data, subtitleCallback, callback)
+    }
+
+    private suspend fun processEpisode(
+        ep: EpisodeItem,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var found = false
+        val v = ep.videoUrl?.trim()
+        if (!v.isNullOrBlank()) {
+            val final = normalizeUrl(v)
+            println("🎯 [YunshanID] videoUrl → $final")
+            if (loadExtractor(final, referer, subtitleCallback, callback)) {
+                found = true
+            }
+        }
+
+        ep.servers?.forEach { server ->
+            val sUrl = server.embedUrl ?: server.url
+            if (!sUrl.isNullOrBlank()) {
+                val final = normalizeUrl(sUrl)
+                println("🎯 [YunshanID] server ${server.name} → $final")
+                if (loadExtractor(final, referer, subtitleCallback, callback)) {
+                    found = true
+                }
+            }
+        }
+        return found
     }
 
     private fun normalizeUrl(url: String): String = when {
