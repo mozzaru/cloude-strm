@@ -47,10 +47,10 @@ fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = extens
 fun Project.android(configuration: LibraryExtension.() -> Unit) {
     extensions.getByName<LibraryExtension>("android").apply {
         project.extensions.findByType(JavaPluginExtension::class.java)?.apply {
-            // Use Java 17 toolchain even if a higher JDK runs the build.
+            // Use Java 21 toolchain as that's what's available in the environment.
             // We still use Java 8 for now which higher JDKs have deprecated.
             toolchain {
-                languageVersion.set(JavaLanguageVersion.of(17))
+                languageVersion.set(JavaLanguageVersion.of(21))
             }
         }
 
