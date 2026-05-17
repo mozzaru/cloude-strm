@@ -1,0 +1,8 @@
+{
+    "name": "Mozzaru Repo",
+    "description": "Mozzaru Repository",
+    "manifestVersion": 1,
+    "pluginLists": [
+      "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/plugins.json"
+    ]
+}

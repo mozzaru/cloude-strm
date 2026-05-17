@@ -1,0 +1,174 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Anichin.cs3",
+        "status": 1,
+        "version": 51,
+        "name": "Anichin",
+        "internalName": "Anichin",
+        "authors": [
+            "mozzaru",
+            "kraptor123"
+        ],
+        "description": "Anime and Movies",
+        "fileSize": 80537,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "Cartoon"
+        ],
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anichin.club&size=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-36bd65912d2dee76dc7509923d4809bf12caa8161f74e79cac330c58c0202dc2",
+        "jarFileSize": 354533,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Anichin.jar",
+        "jarHash": "sha256-d2e686e876fb3f7bb7c798c1955e434661b053112df394d661fd25a27e7d8d1d"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Animexin.cs3",
+        "status": 1,
+        "version": 6,
+        "name": "Animexin",
+        "internalName": "Animexin",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "Anime and Movies",
+        "fileSize": 49067,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "Cartoon"
+        ],
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://animexin.dev&size=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-2b6733e826fe1399e1f27e5a8c2d7670d6733508d85bc994ac22a40315caca93",
+        "jarFileSize": 182112,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Animexin.jar",
+        "jarHash": "sha256-0e9d1ae4b09e7e0b607e6d893e50959302daab4aecc58c8ba12b5d8b48111718"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/DonghuaArena.cs3",
+        "status": 1,
+        "version": 27,
+        "name": "DonghuaArena",
+        "internalName": "DonghuaArena",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "Anime and Movies",
+        "fileSize": 45709,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime"
+        ],
+        "iconUrl": "https://donghuaarena.site/logo.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-02722b5d24534fcf91ee1225856be720f77744885f17153cff4ebb208c3b683e",
+        "jarFileSize": 218058,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/DonghuaArena.jar",
+        "jarHash": "sha256-cbfb290bb9886ae1224d6aa0d346a2de769bee91ad73941a3229e56a9defbbed"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/DonghuaHub.cs3",
+        "status": 1,
+        "version": 10,
+        "name": "DonghuaHub",
+        "internalName": "DonghuaHub",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "All-in-one Donghua aggregator (Anichin, Donghub, YunshanID, Animexin, LuciferDonghua)",
+        "fileSize": 41523,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime"
+        ],
+        "iconUrl": "https://donghub.vip/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-28600875d432457eea8d85b14cd50f964ee1af608e936e1ecf49116867cff896",
+        "jarFileSize": 200148,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/DonghuaHub.jar",
+        "jarHash": "sha256-3291c42f54fa16d48ce2728d14882b65d065a4aed3ecc251d2e736bf058b4622"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Donghub.cs3",
+        "status": 1,
+        "version": 115,
+        "name": "Donghub",
+        "internalName": "Donghub",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "Anime and Movies",
+        "fileSize": 87810,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "Cartoon"
+        ],
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://donghub.vip&size=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-28cc3250ec96d9f9aaa7d0a4223149d8281208ab2342ad13cf470cbe32393247",
+        "jarFileSize": 344867,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Donghub.jar",
+        "jarHash": "sha256-e5c620553ea473136072334af62d4f9fb0a921f8f57dabda0343ad347342602c"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Kuramanime.cs3",
+        "status": 1,
+        "version": 13,
+        "name": "Kuramanime",
+        "internalName": "Kuramanime",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "Streaming Anime and Donghua",
+        "fileSize": 39343,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime"
+        ],
+        "iconUrl": "https://v18.kuramanime.ing/assets/img/logo-full-512.png",
+        "apiVersion": 1,
+        "fileHash": "sha256-2a3ad6ff7a6304877027900574e0a85ef19db3e4700aa57c53278cf747bf5c13",
+        "jarFileSize": 194843,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/Kuramanime.jar",
+        "jarHash": "sha256-981aed92eb0d6650e807869a7e95e65d1b431d513851ff716ad763d98275629f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/YunshanID.cs3",
+        "status": 1,
+        "version": 24,
+        "name": "YunshanID",
+        "internalName": "YunshanID",
+        "authors": [
+            "mozzaru"
+        ],
+        "description": "Anime and Movies",
+        "fileSize": 40595,
+        "repositoryUrl": "https://github.com/mozzaru/cloude-strm",
+        "language": "id",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime"
+        ],
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://yunshanid.site&size=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-db17bee641cc8e88e77172cd8a3133fbca5989be5d09a0b40093d8b045365739",
+        "jarFileSize": 166808,
+        "jarUrl": "https://raw.githubusercontent.com/mozzaru/cloude-strm/builds/YunshanID.jar",
+        "jarHash": "sha256-82cee5aea870307fc5fccb1c05a026c78413661e2cec371804ad856d1ced4b2c"
+    }
+]
