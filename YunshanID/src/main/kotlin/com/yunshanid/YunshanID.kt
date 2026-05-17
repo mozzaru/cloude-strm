@@ -64,7 +64,7 @@ class YunshanID : MainAPI() {
         }
         val episodes = detail.episodes?.map { ep ->
             newEpisode(ep) {
-                this.name = "${ep.epNumber}. ${detail.title} Episode ${ep.epNumber} Subtitle Indonesia"
+                this.name = "Episode ${ep.epNumber}"
                 this.episode = ep.epNumber
                 this.data = mapper.writeValueAsString(ep)
                 this.posterUrl = poster
@@ -108,7 +108,12 @@ class YunshanID : MainAPI() {
         val type = if (this.type?.contains("Movie", ignoreCase = true) == true) TvType.Movie else TvType.Anime
         val epCount = latestEp ?: 0
         val isCompleted = status == "Completed"
-        val titleWithTag = if (isCompleted) "${this.title} (Completed)" else (this.title ?: "")
+        val isOngoing = status == "On-Going"
+        val titleWithTag = when {
+            isCompleted -> "${this.title} (Completed)"
+            isOngoing -> "${this.title} (Ongoing)"
+            else -> this.title ?: ""
+        }
 
         return newAnimeSearchResponse(titleWithTag, "$mainUrl/api/donghua/${this.id}", type) {
             this.posterUrl = this@toSearchResponse.posterUrl ?: this@toSearchResponse.poster
