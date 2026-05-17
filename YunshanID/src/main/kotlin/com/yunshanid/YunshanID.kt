@@ -57,7 +57,11 @@ class YunshanID : MainAPI() {
         val poster = detail.posterUrl ?: detail.poster ?: ""
         val description = detail.synopsis
         val type = if (detail.type?.contains("Movie", ignoreCase = true) == true) TvType.Movie else TvType.Anime
-
+        val status = when (detail.status) {
+            "On-Going" -> ShowStatus.Ongoing
+            "Completed" -> ShowStatus.Completed
+            else -> null
+        }
         val episodes = detail.episodes?.map { ep ->
             newEpisode(ep) {
                 this.name = "${ep.epNumber}. ${detail.title} Episode ${ep.epNumber} Subtitle Indonesia"
@@ -70,6 +74,8 @@ class YunshanID : MainAPI() {
         return newTvSeriesLoadResponse(title, url, type, episodes) {
             this.posterUrl = poster
             this.plot = description
+            this.tags = detail.genres
+            this.showStatus = status
         }
     }
 
@@ -129,6 +135,9 @@ class YunshanID : MainAPI() {
         @JsonProperty("poster") val poster: String?,
         @JsonProperty("synopsis") val synopsis: String?,
         @JsonProperty("type") val type: String?,
+        @JsonProperty("status") val status: String?,
+        @JsonProperty("genres") val genres: List<String>?,
+        @JsonProperty("rating") val rating: String?,
         @JsonProperty("episodes") val episodes: List<Episode>?
     )
 
