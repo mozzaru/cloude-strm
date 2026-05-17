@@ -30,7 +30,7 @@ class Donghub : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Rilisan Terbaru",
+        "" to "Rilisan Terbaru",
         "popular-today" to "Populer Hari Ini",
         "anime/?order=popular" to "Populer",
         "anime/?status=ongoing&sub=&order=" to "Ongoing",
@@ -52,11 +52,23 @@ class Donghub : MainAPI() {
             )
         }
 
-        val url = if (page == 1) "$mainUrl/${request.data}"
-        else "$mainUrl/${request.data}&page=$page"
+        val url = when {
+            request.data.isEmpty() -> if (page == 1) mainUrl else "$mainUrl/page/$page/"
+            page == 1 -> "$mainUrl/${request.data}"
+            else -> "$mainUrl/${request.data}&page=$page"
+        }
 
         val document = app.get(url, headers = baseHeaders).document
-        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+
+        val items = if (request.data.isEmpty()) {
+            val latestSection = document.select("div.bixbox").firstOrNull { box ->
+                box.selectFirst("div.releases.latesthome") != null
+            }
+            latestSection?.select("article.bs")?.mapNotNull { it.toSearchResult() } ?: document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        } else {
+            document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        }.distinctBy { it.url }
+
         val hasNext = document.selectFirst("div.hpage a.r") != null
 
         return newHomePageResponse(
