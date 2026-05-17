@@ -34,6 +34,7 @@ class DonghuaHub : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
+        "all" to "Semua Rilisan Terbaru (Merged)",
         "anichin|anime/?order=update" to "[Anichin] Rilisan Terbaru",
         "donghub|anime/?order=update" to "[Donghub] Rilisan Terbaru",
         "yunshan|api/donghuas" to "[YunshanID] Rilisan Terbaru",
@@ -42,28 +43,58 @@ class DonghuaHub : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == "all") {
+            val allItems = coroutineScope {
+                sites.map { (key, baseUrl) ->
+                    async {
+                        try {
+                            if (key == "yunshan") parseYunshanPage()
+                            else parseAnimeStreamPage("$baseUrl/anime/?order=update", baseUrl)
+                        } catch (_: Exception) {
+                            emptyList<SearchResponse>()
+                        }
+                    }
+                }.awaitAll().flatten().distinctBy { it.url }
+            }
+            return newHomePageResponse(
+                list = HomePageList(name = request.name, list = allItems, isHorizontalImages = false),
+                hasNext = false
+            )
+        }
+
         val parts = request.data.split("|")
         val siteKey = parts[0]
         val path = parts.getOrNull(1) ?: ""
         val baseUrl = sites[siteKey] ?: return newHomePageResponse(request.name, emptyList())
 
-        val items = try {
+        val items = mutableListOf<SearchResponse>()
+        var hasNext = false
+
+        try {
             if (siteKey == "yunshan") {
-                parseYunshanPage()
+                items.addAll(parseYunshanPage())
             } else {
                 val url = if (page == 1) "$baseUrl/$path" else {
-                    if (path.contains("?")) "$baseUrl/$path&page=$page"
-                    else "$baseUrl/${path}page/$page/"
+                    val pagePath = "page/$page/"
+                    if (path.contains("?")) {
+                        val base = path.substringBefore("?")
+                        val query = path.substringAfter("?")
+                        "$baseUrl/$base$pagePath?$query"
+                    } else {
+                        "$baseUrl/$path$pagePath"
+                    }
                 }
-                parseAnimeStreamPage(url, baseUrl)
+                val document = app.get(url, headers = browserHeaders).document
+                items.addAll(document.select("div.listupd article").mapNotNull { it.toSearchResult(baseUrl) })
+                hasNext = document.selectFirst("div.hpage a.r, a.next, .next.page-numbers") != null
             }
         } catch (e: Exception) {
-            emptyList()
+            println("❌ [DonghuaHub] Error fetching main page from $siteKey: ${e.message}")
         }
 
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
-            hasNext = items.isNotEmpty()
+            hasNext = hasNext
         )
     }
 
@@ -93,14 +124,15 @@ class DonghuaHub : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         return when {
-            url.contains("yunshanid.site") || !url.startsWith("http") -> loadYunshan(url)
+            url.contains("yunshanid.site") -> loadYunshan(url)
             else -> loadAnimeStream(url)
         }
     }
 
     private suspend fun loadYunshan(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val response = app.get("${sites["yunshan"]}/api/donghua/$id", headers = browserHeaders).text
+        val apiUrl = if (url.contains("/api/")) url else "${sites["yunshan"]}/api/donghua/$id"
+        val response = app.get(apiUrl, headers = browserHeaders).text
         val donghua = AppUtils.tryParseJson<DonghuaDetailResponse>(response)
             ?: throw ErrorLoadingException("Failed to parse Yunshan detail")
 
@@ -111,17 +143,15 @@ class DonghuaHub : MainAPI() {
             }
         }.sortedByDescending { it.episode }
 
-        return newAnimeLoadResponse(donghua.title, url, TvType.Anime, false) {
+        return newTvSeriesLoadResponse(donghua.title, url, TvType.Anime, episodes) {
             this.posterUrl = donghua.posterUrl ?: donghua.poster
             this.plot = donghua.synopsis
             this.tags = donghua.genres
-            // this.score = ... // ignore for now to avoid compilation warning/error if type is complex
             this.showStatus = when (donghua.status) {
                 "On-Going" -> ShowStatus.Ongoing
                 "Completed" -> ShowStatus.Completed
                 else -> null
             }
-            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -133,7 +163,7 @@ class DonghuaHub : MainAPI() {
         val initialDoc = app.get(url, headers = browserHeaders).document
 
         // Handle episode pages by finding the series link
-        val seriesLink = initialDoc.selectFirst("div.ts-breadcrumb a[href*=\"/anime/\"], div.breadcrumb a[href*=\"/anime/\"], div.nvs.nvsc a")?.attr("href")
+        val seriesLink = initialDoc.selectFirst("div.ts-breadcrumb a[href*=\"/anime/\"], div.ts-breadcrumb a[href*=\"/series/\"], div.breadcrumb a[href*=\"/anime/\"], div.breadcrumb a[href*=\"/series/\"], div.nvs.nvsc a")?.attr("href")
         val isEpisode = url.contains("-episode-")
 
         val fetchUrl = if (isEpisode && !seriesLink.isNullOrBlank()) fixUrl(seriesLink, url) else url
@@ -191,7 +221,7 @@ class DonghuaHub : MainAPI() {
             this.posterUrl = poster
             this.plot = description
             this.tags = document.select("span.genre a, div.gencontent a").map { it.text() }
-            val statusLabel = document.selectFirst("div.spe span:contains(Status), div.info-content span:contains(Status)")?.text()?.lowercase() ?: ""
+            val statusLabel = (document.selectFirst("div.spe span:contains(Status), div.info-content span:contains(Status)")?.text() ?: "").lowercase()
             this.showStatus = when {
                 statusLabel.contains("ongoing") -> ShowStatus.Ongoing
                 statusLabel.contains("completed") || statusLabel.contains("tamat") -> ShowStatus.Completed
@@ -231,6 +261,7 @@ class DonghuaHub : MainAPI() {
     private fun Element.toSearchResult(baseUrl: String): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val rawTitle = (aTag.attr("title").takeIf { it.isNotBlank() } ?: selectFirst("div.tt")?.ownText() ?: aTag.text()).trim()
+            .replace(Regex("(?i)Subtitle Indonesia|Episode \\d+"), "").trim()
         val href = fixUrl(aTag.attr("href"), baseUrl)
 
         val img = aTag.selectFirst("img")
@@ -242,20 +273,20 @@ class DonghuaHub : MainAPI() {
         val typeLabel = selectFirst(".typez")?.text()?.lowercase().orEmpty()
         val type = if (typeLabel.contains("movie")) TvType.Movie else TvType.Anime
 
-        val epText = selectFirst("span.epx, span.eggepisode")?.text().orEmpty()
+        val epText = selectFirst("span.epx, span.eggepisode, div.bt span.epx")?.text().orEmpty()
         val epNum = epText.replace(Regex("[^0-9]"), "").toIntOrNull()
 
-        val statusText = (selectFirst("div.status, div.bt span.epx")?.text() ?: "").lowercase()
-        val titleWithStatus = when {
-            statusText.contains("tamat") || statusText.contains("complete") -> "$rawTitle (Completed)"
-            statusText.contains("ongoing") -> "$rawTitle (Ongoing)"
-            else -> rawTitle
+        val statusText = (selectFirst("div.status, div.bt span.epx, .status")?.text() ?: "").lowercase()
+        val statusTag = when {
+            statusText.contains("tamat") || statusText.contains("complete") -> "(Completed)"
+            statusText.contains("ongoing") -> "(Ongoing)"
+            else -> ""
         }
 
-        val finalTitle = if (titleWithStatus.contains("Sub", ignoreCase = true)) titleWithStatus else "$titleWithStatus (Sub Indo)"
+        val finalTitle = "${rawTitle.replace(statusTag, "").trim()} $statusTag (Sub Indo)".replace(Regex("\\s+"), " ").trim()
         return newAnimeSearchResponse(finalTitle, href, type) {
             this.posterUrl = posterUrl
-            addSub(epNum)
+            addDubStatus(DubStatus.Subbed, epNum)
         }
     }
 
@@ -263,20 +294,29 @@ class DonghuaHub : MainAPI() {
         return when {
             url.startsWith("http") -> url
             url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> baseUrl.substringBefore("/", "https://") + "//" + baseUrl.substringAfter("//").substringBefore("/") + url
-            else -> "$baseUrl/$url".replace("//", "/")
+            url.startsWith("/") -> {
+                val siteBase = baseUrl.substringBefore("/", "https://") + "//" + baseUrl.substringAfter("//").substringBefore("/")
+                "$siteBase$url"
+            }
+            else -> {
+                val siteBase = baseUrl.substringBefore("/", "https://") + "//" + baseUrl.substringAfter("//").substringBefore("/")
+                "$siteBase/$url".replace("//", "/").replace(":/", "://")
+            }
         }
     }
 
     fun DonghuaResponse.toSearchResponse(): SearchResponse {
-        val titleWithStatus = when (status) {
-            "Completed" -> "$title (Completed)"
-            "On-Going" -> "$title (Ongoing)"
-            else -> title
+        val cleanTitle = title.replace(Regex("(?i)Subtitle Indonesia|Episode \\d+"), "").trim()
+        val statusTag = when (status) {
+            "Completed" -> "(Completed)"
+            "On-Going" -> "(Ongoing)"
+            else -> ""
         }
-        return newAnimeSearchResponse("$titleWithStatus (Sub Indo)", id.toString(), TvType.Anime) {
+        val absoluteUrl = "${sites["yunshan"]}/api/donghua/$id"
+        val finalTitle = "${cleanTitle.replace(statusTag, "").trim()} $statusTag (Sub Indo)".replace(Regex("\\s+"), " ").trim()
+        return newAnimeSearchResponse(finalTitle, absoluteUrl, TvType.Anime) {
             this.posterUrl = posterUrl ?: poster
-            addSub(latestEp)
+            addDubStatus(DubStatus.Subbed, latestEp)
         }
     }
 
@@ -288,12 +328,7 @@ class DonghuaHub : MainAPI() {
 
     private suspend fun parseAnimeStreamPage(url: String, baseUrl: String): List<SearchResponse> {
         val document = app.get(url, headers = browserHeaders).document
-        val latestSection = document.select("div.bixbox").firstOrNull { box ->
-            box.selectFirst("div.releases.latesthome") != null
-        }
-        val items = latestSection?.select("article.bs")?.mapNotNull { it.toSearchResult(baseUrl) }
-            ?: document.select("div.listupd > article").mapNotNull { it.toSearchResult(baseUrl) }
-
+        val items = document.select("div.listupd article").mapNotNull { it.toSearchResult(baseUrl) }
         return items.distinctBy { it.url }
     }
 }
