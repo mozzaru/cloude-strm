@@ -143,7 +143,7 @@ class DonghuaHub : MainAPI() {
             }
         }.sortedByDescending { it.episode }
 
-        return newTvSeriesLoadResponse(donghua.title, url, TvType.Anime, episodes) {
+        return newAnimeLoadResponse(donghua.title, url, TvType.Anime, false) {
             this.posterUrl = donghua.posterUrl ?: donghua.poster
             this.plot = donghua.synopsis
             this.tags = donghua.genres
@@ -152,6 +152,7 @@ class DonghuaHub : MainAPI() {
                 "Completed" -> ShowStatus.Completed
                 else -> null
             }
+            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -217,7 +218,7 @@ class DonghuaHub : MainAPI() {
             })
         }
 
-        return newTvSeriesLoadResponse(title, fetchUrl, tvType, episodes) {
+        return newAnimeLoadResponse(title, fetchUrl, tvType, false) {
             this.posterUrl = poster
             this.plot = description
             this.tags = document.select("span.genre a, div.gencontent a").map { it.text() }
@@ -227,6 +228,7 @@ class DonghuaHub : MainAPI() {
                 statusLabel.contains("completed") || statusLabel.contains("tamat") -> ShowStatus.Completed
                 else -> null
             }
+            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -274,7 +276,7 @@ class DonghuaHub : MainAPI() {
         val type = if (typeLabel.contains("movie")) TvType.Movie else TvType.Anime
 
         val epText = selectFirst("span.epx, span.eggepisode, div.bt span.epx")?.text().orEmpty()
-        val epNum = epText.replace(Regex("[^0-9]"), "").toIntOrNull()
+        val epNum = Regex("\\d+").find(epText)?.value?.toIntOrNull()
 
         val statusText = (selectFirst("div.status, div.bt span.epx, .status")?.text() ?: "").lowercase()
         val statusTag = when {
