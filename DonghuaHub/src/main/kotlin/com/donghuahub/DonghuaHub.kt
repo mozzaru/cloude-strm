@@ -287,6 +287,7 @@ class DonghuaHub : MainAPI() {
         return newAnimeSearchResponse(finalTitle, href, type) {
             this.posterUrl = posterUrl
             addDubStatus(DubStatus.Subbed, epNum)
+            addSub(epNum)
         }
     }
 
@@ -317,6 +318,7 @@ class DonghuaHub : MainAPI() {
         return newAnimeSearchResponse(finalTitle, absoluteUrl, TvType.Anime) {
             this.posterUrl = posterUrl ?: poster
             addDubStatus(DubStatus.Subbed, latestEp)
+            addSub(latestEp)
         }
     }
 

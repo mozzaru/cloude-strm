@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 5
+version = 6
 
 cloudstream {
     description = "All-in-one Donghua aggregator (Anichin, Donghub, YunshanID, Animexin, LuciferDonghua)"
