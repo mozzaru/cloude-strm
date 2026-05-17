@@ -112,7 +112,7 @@ class DonghuaHub : MainAPI() {
         }.sortedByDescending { it.episode }
 
         return newAnimeLoadResponse(donghua.title, url, TvType.Anime, false) {
-            this.posterUrl = donghua.posterUrl
+            this.posterUrl = donghua.posterUrl ?: donghua.poster
             this.plot = donghua.synopsis
             this.tags = donghua.genres
             // this.score = ... // ignore for now to avoid compilation warning/error if type is complex
@@ -252,7 +252,8 @@ class DonghuaHub : MainAPI() {
             else -> rawTitle
         }
 
-        return newAnimeSearchResponse(titleWithStatus, href, type) {
+        val finalTitle = if (titleWithStatus.contains("Sub", ignoreCase = true)) titleWithStatus else "$titleWithStatus (Sub Indo)"
+        return newAnimeSearchResponse(finalTitle, href, type) {
             this.posterUrl = posterUrl
             addSub(epNum)
         }
@@ -268,9 +269,13 @@ class DonghuaHub : MainAPI() {
     }
 
     fun DonghuaResponse.toSearchResponse(): SearchResponse {
-        val titleWithStatus = if (status == "Completed") "$title (Completed)" else if (status == "On-Going") "$title (Ongoing)" else title
-        return newAnimeSearchResponse(titleWithStatus, id.toString(), TvType.Anime) {
-            this.posterUrl = posterUrl
+        val titleWithStatus = when (status) {
+            "Completed" -> "$title (Completed)"
+            "On-Going" -> "$title (Ongoing)"
+            else -> title
+        }
+        return newAnimeSearchResponse("$titleWithStatus (Sub Indo)", id.toString(), TvType.Anime) {
+            this.posterUrl = posterUrl ?: poster
             addSub(latestEp)
         }
     }
@@ -297,6 +302,7 @@ data class DonghuaResponse(
     @JsonProperty("id") val id: Int,
     @JsonProperty("title") val title: String,
     @JsonProperty("poster_url") val posterUrl: String?,
+    @JsonProperty("poster") val poster: String?,
     @JsonProperty("status") val status: String?,
     @JsonProperty("latest_ep") val latestEp: Int?
 )
@@ -306,6 +312,7 @@ data class DonghuaDetailResponse(
     @JsonProperty("title") val title: String,
     @JsonProperty("synopsis") val synopsis: String?,
     @JsonProperty("poster_url") val posterUrl: String?,
+    @JsonProperty("poster") val poster: String?,
     @JsonProperty("status") val status: String?,
     @JsonProperty("rating") val rating: Double,
     @JsonProperty("genres") val genres: List<String>?,
