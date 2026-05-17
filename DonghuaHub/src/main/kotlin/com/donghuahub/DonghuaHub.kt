@@ -130,7 +130,7 @@ class DonghuaHub : MainAPI() {
     }
 
     private suspend fun loadYunshan(url: String): LoadResponse {
-        val id = url.substringAfterLast("/")
+        val id = Regex("\\d+").find(url.substringAfterLast("/"))?.value ?: url.substringAfterLast("/")
         val apiUrl = if (url.contains("/api/")) url else "${sites["yunshan"]}/api/donghua/$id"
         val response = app.get(apiUrl, headers = browserHeaders).text
         val donghua = AppUtils.tryParseJson<DonghuaDetailResponse>(response)
@@ -143,7 +143,7 @@ class DonghuaHub : MainAPI() {
             }
         }.sortedByDescending { it.episode }
 
-        return newAnimeLoadResponse(donghua.title, url, TvType.Anime, false) {
+        return newTvSeriesLoadResponse(donghua.title, url, TvType.Anime, episodes) {
             this.posterUrl = donghua.posterUrl ?: donghua.poster
             this.plot = donghua.synopsis
             this.tags = donghua.genres
@@ -152,7 +152,6 @@ class DonghuaHub : MainAPI() {
                 "Completed" -> ShowStatus.Completed
                 else -> null
             }
-            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -218,7 +217,7 @@ class DonghuaHub : MainAPI() {
             })
         }
 
-        return newAnimeLoadResponse(title, fetchUrl, tvType, false) {
+        return newTvSeriesLoadResponse(title, fetchUrl, tvType, episodes) {
             this.posterUrl = poster
             this.plot = description
             this.tags = document.select("span.genre a, div.gencontent a").map { it.text() }
@@ -228,7 +227,6 @@ class DonghuaHub : MainAPI() {
                 statusLabel.contains("completed") || statusLabel.contains("tamat") -> ShowStatus.Completed
                 else -> null
             }
-            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -275,8 +273,19 @@ class DonghuaHub : MainAPI() {
         val typeLabel = selectFirst(".typez")?.text()?.lowercase().orEmpty()
         val type = if (typeLabel.contains("movie")) TvType.Movie else TvType.Anime
 
-        val epText = selectFirst("span.epx, span.eggepisode, div.bt span.epx")?.text().orEmpty()
-        val epNum = Regex("\\d+").find(epText)?.value?.toIntOrNull()
+        // Advanced episode number extraction for thumbnails
+        val epText = select("span.epx, span.eggepisode, div.bt span, .bt .epx, .limit .epx, .eggepisode, .epxs, .limit span").text()
+        var epNum = Regex("(?i)(?:Episode|Ep|Eps)\\s*(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("\\d+").find(epText)?.value?.toIntOrNull()
+
+        if (epNum == null) {
+            val cardText = text()
+            epNum = Regex("(?i)(?:Episode|Ep|Eps)\\s*(\\d+)").find(cardText)?.groupValues?.get(1)?.toIntOrNull()
+        }
+
+        if (epNum == null) {
+            epNum = Regex("(?i)(?:Episode|Ep|Eps)\\s*(\\d+)").find(aTag.attr("title"))?.groupValues?.get(1)?.toIntOrNull()
+        }
 
         val statusText = (selectFirst("div.status, div.bt span.epx, .status")?.text() ?: "").lowercase()
         val statusTag = when {
@@ -285,7 +294,9 @@ class DonghuaHub : MainAPI() {
             else -> ""
         }
 
-        val finalTitle = "${rawTitle.replace(statusTag, "").trim()} $statusTag (Sub Indo)".replace(Regex("\\s+"), " ").trim()
+        val cleanTitle = rawTitle.replace(Regex("(?i)Subtitle Indonesia|Episode \\d+"), "").trim()
+        val finalTitle = "${cleanTitle.replace(statusTag, "").trim()} $statusTag (Sub Indo)".replace(Regex("\\s+"), " ").trim()
+
         return newAnimeSearchResponse(finalTitle, href, type) {
             this.posterUrl = posterUrl
             addDubStatus(DubStatus.Subbed, epNum)
@@ -315,7 +326,7 @@ class DonghuaHub : MainAPI() {
             "On-Going" -> "(Ongoing)"
             else -> ""
         }
-        val absoluteUrl = "${sites["yunshan"]}/api/donghua/$id"
+        val absoluteUrl = if (id > 0) "${sites["yunshan"]}/api/donghua/$id" else ""
         val finalTitle = "${cleanTitle.replace(statusTag, "").trim()} $statusTag (Sub Indo)".replace(Regex("\\s+"), " ").trim()
         return newAnimeSearchResponse(finalTitle, absoluteUrl, TvType.Anime) {
             this.posterUrl = posterUrl ?: poster
