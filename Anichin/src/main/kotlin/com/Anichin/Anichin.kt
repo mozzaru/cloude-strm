@@ -68,6 +68,12 @@ class Anichin : MainAPI() {
         )
     }
 
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/?s=${query.replace(" ", "+")}"
+        val document = app.get(url, headers = browserHeaders).document
+        return document.select("div.listupd > article.bs").mapNotNull { it.toSearchResult() }
+    }
+
     private fun Element.toSearchResult(): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val rawTitle = aTag.attr("title").ifBlank { aTag.text() }
