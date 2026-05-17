@@ -39,13 +39,17 @@ class DonghuaHub : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val items = when (request.data) {
-            "anichin" -> parseAnimeStreamPage(sites["anichin"]!!, sites["anichin"]!!)
-            "donghub" -> parseAnimeStreamPage(sites["donghub"]!!, sites["donghub"]!!)
-            "yunshan" -> parseYunshanPage()
-            "animexin" -> parseAnimeStreamPage(sites["animexin"]!!, sites["animexin"]!!)
-            "lucifer" -> parseAnimeStreamPage(sites["lucifer"]!!, sites["lucifer"]!!)
-            else -> emptyList()
+        val items = try {
+            when (request.data) {
+                "anichin" -> parseAnimeStreamPage(sites["anichin"]!!, sites["anichin"]!!)
+                "donghub" -> parseAnimeStreamPage(sites["donghub"]!!, sites["donghub"]!!)
+                "yunshan" -> parseYunshanPage()
+                "animexin" -> parseAnimeStreamPage(sites["animexin"]!!, sites["animexin"]!!)
+                "lucifer" -> parseAnimeStreamPage(sites["lucifer"]!!, sites["lucifer"]!!)
+                else -> emptyList()
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
 
         return newHomePageResponse(
@@ -59,8 +63,9 @@ class DonghuaHub : MainAPI() {
         sites.forEach { (key, baseUrl) ->
             try {
                 if (key == "yunshan") {
-                    val response = app.get("$baseUrl/api/donghuas").parsedSafe<List<DonghuaResponse>>()
-                    response?.filter { it.title.contains(query, ignoreCase = true) }?.forEach {
+                    val response = app.get("$baseUrl/api/donghuas", headers = browserHeaders).text
+                    val parsed = AppUtils.tryParseJson<List<DonghuaResponse>>(response)
+                    parsed?.filter { it.title.contains(query, ignoreCase = true) }?.forEach {
                         results.add(it.toSearchResponse())
                     }
                 } else {
@@ -83,7 +88,8 @@ class DonghuaHub : MainAPI() {
 
     private suspend fun loadYunshan(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val donghua = app.get("${sites["yunshan"]}/api/donghua/$id").parsedSafe<DonghuaDetailResponse>()
+        val response = app.get("${sites["yunshan"]}/api/donghua/$id", headers = browserHeaders).text
+        val donghua = AppUtils.tryParseJson<DonghuaDetailResponse>(response)
             ?: throw ErrorLoadingException("Failed to parse Yunshan detail")
 
         val episodes = donghua.episodes.map { ep ->
@@ -172,7 +178,7 @@ class DonghuaHub : MainAPI() {
             return true
         }
 
-        val document = app.get(data, headers = browserHeaders).document
+        val document = try { app.get(data, headers = browserHeaders).document } catch (e: Exception) { return false }
         document.select(".mobius option").forEach { server ->
             val base64 = server.attr("value").trim()
             if (base64.isBlank()) return@forEach
@@ -216,7 +222,7 @@ class DonghuaHub : MainAPI() {
         }
     }
 
-    private fun DonghuaResponse.toSearchResponse(): SearchResponse {
+    fun DonghuaResponse.toSearchResponse(): SearchResponse {
         val titleWithStatus = if (status == "Completed") "$title (Completed)" else if (status == "On-Going") "$title (Ongoing)" else title
         return newAnimeSearchResponse(titleWithStatus, id.toString(), TvType.Anime) {
             this.posterUrl = posterUrl
@@ -225,8 +231,9 @@ class DonghuaHub : MainAPI() {
     }
 
     private suspend fun parseYunshanPage(): List<SearchResponse> {
-        val response = app.get("${sites["yunshan"]}/api/donghuas").parsedSafe<List<DonghuaResponse>>()
-        return response?.map { it.toSearchResponse() } ?: emptyList()
+        val response = app.get("${sites["yunshan"]}/api/donghuas", headers = browserHeaders).text
+        val parsed = AppUtils.tryParseJson<List<DonghuaResponse>>(response)
+        return parsed?.map { it.toSearchResponse() } ?: emptyList()
     }
 
     private suspend fun parseAnimeStreamPage(url: String, baseUrl: String): List<SearchResponse> {
@@ -239,27 +246,28 @@ class DonghuaHub : MainAPI() {
 
         return items.distinctBy { it.url }
     }
-    data class DonghuaResponse(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("title") val title: String,
-        @JsonProperty("poster_url") val posterUrl: String?,
-        @JsonProperty("status") val status: String?,
-        @JsonProperty("latest_ep") val latestEp: Int?
-    )
-
-    data class DonghuaDetailResponse(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("title") val title: String,
-        @JsonProperty("synopsis") val synopsis: String?,
-        @JsonProperty("poster_url") val posterUrl: String?,
-        @JsonProperty("rating") val rating: Double,
-        @JsonProperty("genres") val genres: List<String>?,
-        @JsonProperty("episodes") val episodes: List<EpisodeResponse>
-    )
-
-    data class EpisodeResponse(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("ep_number") val epNumber: Int,
-        @JsonProperty("video_url") val videoUrl: String,
-    )
 }
+
+data class DonghuaResponse(
+    @JsonProperty("id") val id: Int,
+    @JsonProperty("title") val title: String,
+    @JsonProperty("poster_url") val posterUrl: String?,
+    @JsonProperty("status") val status: String?,
+    @JsonProperty("latest_ep") val latestEp: Int?
+)
+
+data class DonghuaDetailResponse(
+    @JsonProperty("id") val id: Int,
+    @JsonProperty("title") val title: String,
+    @JsonProperty("synopsis") val synopsis: String?,
+    @JsonProperty("poster_url") val posterUrl: String?,
+    @JsonProperty("rating") val rating: Double,
+    @JsonProperty("genres") val genres: List<String>?,
+    @JsonProperty("episodes") val episodes: List<EpisodeResponse>
+)
+
+data class EpisodeResponse(
+    @JsonProperty("id") val id: Int,
+    @JsonProperty("ep_number") val epNumber: Int,
+    @JsonProperty("video_url") val videoUrl: String,
+)
