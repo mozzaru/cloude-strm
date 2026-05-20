@@ -14,6 +14,10 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
+class FileMoon : FilemoonV2() {
+    override var mainUrl = "https://filemoon.sx"
+    override var name = "FileMoon"
+
 class Sunrong : FilemoonV2() {
     override var mainUrl = "https://sunrong.my.id"
     override var name = "Sunrong"
@@ -134,7 +138,7 @@ open class Kuramadrive : ExtractorApi() {
 
 class RPMShare : ExtractorApi() {
     override val name: String = "RPMShare"
-    override val mainUrl: String = "https://rpmshare.com"
+    override val mainUrl: String = "https://kurama.rpmvip.com"
     override val requiresReferer: Boolean = true
 
     override suspend fun getUrl(
@@ -144,8 +148,12 @@ class RPMShare : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val document = app.get(url, referer = referer).document
-        val script = document.select("script").find { it.html().contains("sources:") } ?: return
-        val videoUrl = Regex("""file:\s*"([^"]+)"""").find(script.html())?.groupValues?.get(1) ?: return
+        val script = document.select("script").find {
+            it.html().contains("sources") || it.html().contains("file:")
+        } ?: return
+
+        val videoUrl = Regex("""(?:file|src)\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+            .find(script.html())?.groupValues?.get(1) ?: return
 
         callback.invoke(
             newExtractorLink(
@@ -161,9 +169,37 @@ class RPMShare : ExtractorApi() {
     }
 }
 
-class StreamP2P : Filesim() {
-    override var mainUrl = "https://streamp2p.com"
+class StreamP2P : ExtractorApi() {
+    override var mainUrl = "https://kurama.p2pstream.online"
     override var name = "StreamP2P"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val document = app.get(url, referer = referer).document
+        val script = document.select("script").find {
+            it.html().contains("sources") || it.html().contains("file:")
+        } ?: return
+
+        val videoUrl = Regex("""(?:file|src)\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+            .find(script.html())?.groupValues?.get(1) ?: return
+
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = videoUrl,
+                type = INFER_TYPE
+            ) {
+                quality = Qualities.Unknown.value
+                this.referer = url
+            }
+        )
+    }
 }
 
 class Doodstream : DoodLaExtractor() {

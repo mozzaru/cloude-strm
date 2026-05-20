@@ -12,6 +12,7 @@ class KuramanimeProvider: Plugin() {
         registerExtractorAPI(Kuramadrive())
         registerExtractorAPI(Lbx())
         registerExtractorAPI(Sunrong())
+        registerExtractorAPI(FileMoon())
         registerExtractorAPI(RPMShare())
         registerExtractorAPI(StreamP2P())
         registerExtractorAPI(Doodstream())
