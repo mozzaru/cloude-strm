@@ -24,8 +24,8 @@ class Kuramanime : MainAPI() {
         "quick/ongoing?order_by=latest" to "Sedang Tayang",
         "quick/finished?order_by=latest" to "Selesai Tayang",
         "quick/movie?order_by=latest" to "Film Layar Lebar",
-        "quick/donghua?order_by=latest" to "Donghua",
-        "anime?order_by=latest" to "Anime",
+        "properties/country/china?order_by=latest" to "Donghua",
+        "properties/country/jepang?order_by=latest" to "Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -38,8 +38,11 @@ class Kuramanime : MainAPI() {
         val document = app.get(url, headers = browserHeaders).document
         val items = document.select("div.product__item").mapNotNull { it.toSearchResult() }
 
-        val hasNext = document.selectFirst("a.page__link i.fa-angle-right") != null ||
-                      document.select("div.product__pagination a").any { it.text().trim() == (page + 1).toString() }
+        val hasNext = document.select("div.product__pagination a").any {
+            it.text().trim().equals("Next", ignoreCase = true) ||
+            it.selectFirst("i.fa-angle-right") != null ||
+            it.text().trim() == (page + 1).toString()
+        }
 
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
@@ -127,31 +130,57 @@ class Kuramanime : MainAPI() {
             else -> null
         }
 
-        val epPopover = document.selectFirst("#episodeLists")
         val episodes = mutableListOf<Episode>()
 
-        if (epPopover != null) {
-            val content = epPopover.attr("data-content")
-            val epDoc = Jsoup.parse(content)
-            episodes.addAll(parseEpisodes(epDoc))
-
-            // Check for more pages
-            var page = 2
-            while (true) {
-                val pageUrl = if (url.contains("?")) "$url&page=$page" else "$url?page=$page"
-                val pageDoc = app.get(pageUrl, headers = browserHeaders).document
-                val nextPagePopover = pageDoc.selectFirst("#episodeLists")
-                if (nextPagePopover != null) {
-                    val nextContent = nextPagePopover.attr("data-content")
-                    val nextEpDoc = Jsoup.parse(nextContent)
-                    val newEpisodes = parseEpisodes(nextEpDoc)
-                    if (newEpisodes.isEmpty() || episodes.any { it.data == newEpisodes.first().data }) break
-                    episodes.addAll(newEpisodes)
-                    page++
-                } else {
-                    break
+        fun parseFromDoc(doc: Element) {
+            // Try grid buttons
+            val buttons = doc.select("#animeEpisodes a.ep-button")
+            if (buttons.isNotEmpty()) {
+                buttons.forEach {
+                    val epHref = fixUrl(it.attr("href"))
+                    val epText = it.text().trim()
+                    val epNum = Regex("""Ep\s*(\d+)""").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                    if (episodes.none { e -> e.data == epHref }) {
+                        episodes.add(newEpisode(epHref) {
+                            this.episode = epNum
+                            this.name = "Episode $epNum"
+                        })
+                    }
                 }
             }
+
+            // Try popover
+            val popover = doc.selectFirst("#episodeLists")
+            if (popover != null) {
+                val content = popover.attr("data-content")
+                val epDoc = Jsoup.parse(content)
+                epDoc.select("a.btn-danger, a.btn-secondary").forEach {
+                    val epHref = fixUrl(it.attr("href"))
+                    val epText = it.text().trim()
+                    if (epHref.contains("/batch/")) return@forEach
+                    val epNum = Regex("""Ep\s*(\d+)""").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                    if (episodes.none { e -> e.data == epHref }) {
+                        episodes.add(newEpisode(epHref) {
+                            this.episode = epNum
+                            this.name = "Episode $epNum"
+                        })
+                    }
+                }
+            }
+        }
+
+        // Initial parse
+        parseFromDoc(document)
+
+        // Pagination
+        var currentPage = 2
+        while (true) {
+            val pageUrl = if (url.contains("?")) "$url&page=$currentPage" else "$url?page=$currentPage"
+            val pageDoc = app.get(pageUrl, headers = browserHeaders).document
+            val beforeCount = episodes.size
+            parseFromDoc(pageDoc)
+            if (episodes.size == beforeCount || currentPage > 50) break
+            currentPage++
         }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
@@ -160,18 +189,6 @@ class Kuramanime : MainAPI() {
             this.tags = genres
             this.showStatus = status
             addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.data }.sortedBy { it.episode })
-        }
-    }
-
-    private fun parseEpisodes(doc: Element): List<Episode> {
-        return doc.select("a.btn-danger").mapNotNull {
-            val href = it.attr("href")
-            val text = it.text().trim()
-            val epNum = Regex("""Ep\s*(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
-            newEpisode(href) {
-                this.episode = epNum
-                this.name = "Episode $epNum"
-            }
         }
     }
 
