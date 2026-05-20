@@ -6,9 +6,9 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.FilemoonV2
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.StreamSB
+import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
@@ -152,11 +152,21 @@ class RPMShare : ExtractorApi() {
                 source = name,
                 name = name,
                 url = videoUrl,
-                type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                type = INFER_TYPE
             ) {
                 quality = Qualities.Unknown.value
                 this.referer = url
             }
         )
     }
+}
+
+class StreamP2P : Filesim() {
+    override var mainUrl = "https://streamp2p.com"
+    override var name = "StreamP2P"
+}
+
+class Doodstream : DoodLaExtractor() {
+    override var mainUrl = "https://dood.li"
+    override var name = "Doodstream"
 }

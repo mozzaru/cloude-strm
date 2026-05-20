@@ -3,6 +3,7 @@ package com.kuramanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
+import com.lagradost.cloudstream3.amap
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
@@ -11,6 +12,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.delay
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.util.concurrent.TimeUnit
 
 class Kuramanime : MainAPI() {
     override var mainUrl = "https://v9.kuramanime.blog"
@@ -20,7 +22,7 @@ class Kuramanime : MainAPI() {
     override var lang = "id"
     override var sequentialMainPage = true
     override val hasDownloadSupport = true
-    var authorization: String? = null
+    var authorization: String? = "kJuHHkaqcBFXiGMHQf6bJw8YAyDcwGD8Ur"
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
@@ -46,12 +48,10 @@ class Kuramanime : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/anime/ongoing?order_by=latest&page=" to "Sedang Tayang",
-        "$mainUrl/anime/finished?order_by=latest&page=" to "Selesai Tayang",
-        "$mainUrl/anime?country=cn&order_by=latest&page=" to "Donghua",
-        "$mainUrl/anime?country=jp&order_by=latest&page=" to "Anime",
-        "$mainUrl/anime?order_by=most_viewed&page=" to "Terpopuler",
-        "$mainUrl/anime/movie?order_by=latest&page=" to "Film Layar Lebar",
+        "$mainUrl/anime/ongoing?order_by=updated&page=" to "Sedang Tayang",
+        "$mainUrl/anime/finished?order_by=updated&page=" to "Selesai Tayang",
+        "$mainUrl/properties/season/summer-2022?order_by=most_viewed&page=" to "Dilihat Terbanyak Musim Ini",
+        "$mainUrl/anime/movie?order_by=updated&page=" to "Film Layar Lebar",
     )
 
     override suspend fun getMainPage(
@@ -84,7 +84,7 @@ class Kuramanime : MainAPI() {
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
-            addDubStatus(dubExist = false, subExist = true, subEpisodes = episode)
+            addSub(episode)
         }
 
     }
@@ -118,7 +118,7 @@ class Kuramanime : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
-        for (i in 1..60) {
+        for (i in 1..30) {
             val doc = app.get("$url?page=$i").document
             val eps = Jsoup.parse(doc.select("#episodeLists").attr("data-content"))
                 .select("a.btn.btn-sm.btn-danger")
@@ -189,6 +189,12 @@ class Kuramanime : MainAPI() {
                     link,
                     INFER_TYPE
                 ) {
+//                    this.headers = mapOf(
+//                        "Accept" to "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5",
+//                        "Range" to "bytes=0-",
+//                        "Sec-Fetch-Dest" to "video",
+//                        "Sec-Fetch-Mode" to "no-cors",
+//                    )
                     this.quality = quality ?: Qualities.Unknown.value
                 }
             )
