@@ -1,4 +1,4 @@
-package com.Kuramanime
+package com.kuramanime
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
@@ -7,7 +7,10 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class KuramanimeProvider: Plugin() {
     override fun load() {
         registerMainAPI(Kuramanime())
-        registerExtractorAPI(KuramadriveS1())
-        registerExtractorAPI(RPMShare())
+        registerExtractorAPI(Nyomo())
+        registerExtractorAPI(Streamhide())
+        registerExtractorAPI(Kuramadrive())
+        registerExtractorAPI(Lbx())
+        registerExtractorAPI(Sunrong())
     }
 }
