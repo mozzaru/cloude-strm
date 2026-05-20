@@ -21,26 +21,22 @@ class Kuramanime : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "properties/status/ongoing" to "Anime Ongoing",
-        "properties/status/finished_airing" to "Anime Selesai",
-        "anime?order_by=latest" to "Update Terbaru",
-        "anime?order_by=latest&type=episode" to "Rilisan Episode Terbaru",
+        "quick/ongoing?order_by=latest" to "Sedang Tayang",
+        "quick/finished?order_by=latest" to "Selesai Tayang",
+        "quick/movie?order_by=latest" to "Film Layar Lebar",
+        "quick/donghua?order_by=latest" to "Donghua",
+        "anime?order_by=latest" to "Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = when {
-            request.data.contains("type=episode") -> if (page == 1) mainUrl else "$mainUrl?page=$page"
-            request.data.contains("?") -> "$mainUrl/${request.data}&page=$page"
-            else -> "$mainUrl/${request.data}?page=$page"
+        val url = if (request.data.contains("?")) {
+            "$mainUrl/${request.data}&page=$page"
+        } else {
+            "$mainUrl/${request.data}?page=$page"
         }
 
         val document = app.get(url, headers = browserHeaders).document
-
-        val items = if (request.data.contains("type=episode")) {
-            document.select(".product__sidebar__comment__item").mapNotNull { it.toEpisodeSearchResult() }
-        } else {
-            document.select("div.product__item").mapNotNull { it.toSearchResult() }
-        }
+        val items = document.select("div.product__item").mapNotNull { it.toSearchResult() }
 
         val hasNext = document.selectFirst("a.page__link i.fa-angle-right") != null ||
                       document.select("div.product__pagination a").any { it.text().trim() == (page + 1).toString() }
@@ -62,19 +58,6 @@ class Kuramanime : MainAPI() {
         val epText = selectFirst(".ep")?.text()?.trim()
 
         return newAnimeSearchResponse(title, href, type) {
-            this.posterUrl = posterUrl
-            addDubStatus(DubStatus.Subbed, epText?.filter { it.isDigit() }?.toIntOrNull())
-        }
-    }
-
-    private fun Element.toEpisodeSearchResult(): SearchResponse? {
-        val aTag = selectFirst(".comment__info a") ?: selectFirst("a") ?: return null
-        val title = aTag.selectFirst("h5")?.ownText()?.trim() ?: aTag.text().trim()
-        val href = fixUrl(aTag.attr("href"))
-        val posterUrl = selectFirst(".product__sidebar__comment__item__pic")?.attr("data-setbg")
-        val epText = selectFirst(".comment__info span")?.text()?.trim() // "Episode 11"
-
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
             addDubStatus(DubStatus.Subbed, epText?.filter { it.isDigit() }?.toIntOrNull())
         }
