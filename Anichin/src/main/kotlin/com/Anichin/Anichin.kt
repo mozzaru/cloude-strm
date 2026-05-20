@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 
 class Anichin : MainAPI() {
     override var mainUrl = "https://anichin.moe"
@@ -57,7 +58,7 @@ class Anichin : MainAPI() {
             ?.mapNotNull { it.toSearchResult() }
             ?: emptyList()
 
-        val hasNext = document.selectFirst("div.hpage a.r") != null
+        val hasNext = hasNextPage(document)
         return newHomePageResponse(HomePageList(name, items, isHorizontalImages = false), hasNext)
     }
 
@@ -107,7 +108,7 @@ class Anichin : MainAPI() {
 
         val document = app.get(url, headers = browserHeaders).document
         val items    = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
-        val hasNext  = document.selectFirst("div.hpage a.r") != null
+        val hasNext = hasNextPage(document)
 
         return newHomePageResponse(HomePageList(request.name, items, isHorizontalImages = false), hasNext)
     }
@@ -135,7 +136,19 @@ class Anichin : MainAPI() {
         val tvType   = if (typeText.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
 
         val epxText   = selectFirst("span.epx")?.text()?.trim() ?: ""
-        val epxNumber = Regex("\\d+").find(epxText)?.value?.toIntOrNull()
+        var epxNumber = Regex("\\d+").find(epxText)?.value?.toIntOrNull()
+
+        if (epxNumber == null) {
+            val titleText = aTag.attr("title")
+            epxNumber = Regex("""Episode\s+(\d+)""", RegexOption.IGNORE_CASE)
+                .find(titleText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }
+
+        if (epxNumber == null) {
+            val h2Text = selectFirst("h2")?.text() ?: ""
+            epxNumber = Regex("""Episode\s+(\d+)""", RegexOption.IGNORE_CASE)
+                .find(h2Text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }
 
         val dubStatus = DubStatus.Subbed
 
@@ -334,4 +347,11 @@ class Anichin : MainAPI() {
     private fun emptyHomeResponse(name: String) = newHomePageResponse(
         HomePageList(name, emptyList(), isHorizontalImages = false), false
     )
+
+    private fun hasNextPage(doc: Document): Boolean {
+        if (doc.selectFirst("div.hpage a.r") != null) return true
+        if (doc.selectFirst("a.next.page-numbers") != null) return true
+        if (doc.selectFirst("link[rel=next]") != null) return true
+        return false
+    }
 }
