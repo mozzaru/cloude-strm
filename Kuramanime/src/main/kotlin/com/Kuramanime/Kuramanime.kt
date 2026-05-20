@@ -51,8 +51,8 @@ class Kuramanime : MainAPI() {
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse {
-        val aTag = selectFirst("h5 a") ?: selectFirst("a")!!
+    private fun Element.toSearchResult(): SearchResponse? {
+        val aTag = selectFirst("h5 a") ?: selectFirst("a") ?: return null
         val title = aTag.text().trim()
         val href = fixUrl(aTag.attr("href"))
         val posterUrl = selectFirst(".product__item__pic")?.attr("data-setbg")
@@ -67,9 +67,9 @@ class Kuramanime : MainAPI() {
         }
     }
 
-    private fun Element.toEpisodeSearchResult(): SearchResponse {
-        val aTag = selectFirst("h5 a")!!
-        val title = aTag.ownText().trim()
+    private fun Element.toEpisodeSearchResult(): SearchResponse? {
+        val aTag = selectFirst(".comment__info a") ?: selectFirst("a") ?: return null
+        val title = aTag.selectFirst("h5")?.ownText()?.trim() ?: aTag.text().trim()
         val href = fixUrl(aTag.attr("href"))
         val posterUrl = selectFirst(".product__sidebar__comment__item__pic")?.attr("data-setbg")
         val epText = selectFirst(".comment__info span")?.text()?.trim() // "Episode 11"
@@ -83,7 +83,7 @@ class Kuramanime : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/anime?search=$query"
         val document = app.get(url, headers = browserHeaders).document
-        return document.select("div.product__item").map { it.toSearchResult() }
+        return document.select("div.product__item").mapNotNull { it.toSearchResult() }
     }
 
     private fun generateRandomString(length: Int): String {
