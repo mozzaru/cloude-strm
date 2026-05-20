@@ -17,6 +17,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 class FileMoon : FilemoonV2() {
     override var mainUrl = "https://filemoon.sx"
     override var name = "FileMoon"
+}
 
 class Sunrong : FilemoonV2() {
     override var mainUrl = "https://sunrong.my.id"
