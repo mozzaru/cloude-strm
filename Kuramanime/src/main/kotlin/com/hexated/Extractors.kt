@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.extractors.FilemoonV2
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.extractors.StreamSB
+import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -159,4 +160,14 @@ class RPMShare : ExtractorApi() {
             }
         )
     }
+}
+
+class StreamP2P : Filesim() {
+    override var mainUrl = "https://streamp2p.com"
+    override var name = "StreamP2P"
+}
+
+class Doodstream : DoodLaExtractor() {
+    override var mainUrl = "https://dood.li"
+    override var name = "Doodstream"
 }
