@@ -3,6 +3,7 @@ package com.Kuramanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class Kuramanime : MainAPI() {
@@ -21,11 +22,13 @@ class Kuramanime : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "quick/ongoing?order_by=latest" to "Sedang Tayang",
-        "quick/finished?order_by=latest" to "Selesai Tayang",
+        "anime?order_by=latest&status=ongoing&country=jp" to "Anime Sedang Tayang",
+        "anime?order_by=latest&status=ongoing&country=cn" to "Donghua Sedang Tayang",
+        "anime?order_by=latest&status=finished_airing&country=jp" to "Anime Selesai Tayang",
+        "anime?order_by=latest&status=finished_airing&country=cn" to "Donghua Selesai Tayang",
         "quick/movie?order_by=latest" to "Film Layar Lebar",
-        "properties/country/china?order_by=latest" to "Donghua",
-        "properties/country/jepang?order_by=latest" to "Anime",
+        "anime?order_by=latest&country=jp" to "Anime Jepang Terbaru",
+        "anime?order_by=latest&country=cn" to "Donghua Terbaru",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -54,7 +57,7 @@ class Kuramanime : MainAPI() {
         val aTag = selectFirst("h5 a") ?: selectFirst("a") ?: return null
         val title = aTag.text().trim()
         val href = fixUrl(aTag.attr("href"))
-        val posterUrl = selectFirst(".product__item__pic")?.attr("data-setbg")
+        val posterUrl = selectFirst(".product__item__pic")?.attr("data-setbg") ?: selectFirst(".product__item__pic")?.attr("src")
         val typeText = selectFirst(".product__item__text ul li")?.text()?.lowercase()
         val type = if (typeText?.contains("movie") == true) TvType.Movie else TvType.Anime
 
@@ -67,7 +70,7 @@ class Kuramanime : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/anime?search=$query"
+        val url = "$mainUrl/anime?search=$query&order_by=latest"
         val document = app.get(url, headers = browserHeaders).document
         return document.select("div.product__item").mapNotNull { it.toSearchResult() }
     }
@@ -86,11 +89,9 @@ class Kuramanime : MainAPI() {
         val streamServerKey: String
     )
 
-    private suspend fun getSiteConfig(): SiteConfig? {
+    private suspend fun getSiteConfig(doc: Document): SiteConfig? {
         try {
-            val arcSignal = app.get("$mainUrl/assets/js/arc-signal.min.js", headers = browserHeaders).text
-            val jsFileVar = Regex("""f\s*=\s*"([^"]+)"""").find(arcSignal)?.groupValues?.get(1) ?: return null
-
+            val jsFileVar = doc.selectFirst("[data-kk]")?.attr("data-kk") ?: "wzl3ClXO8shDECR"
             val jsConfig = app.get("$mainUrl/assets/js/$jsFileVar.js", headers = browserHeaders).text
 
             val prefix = Regex("""MIX_PREFIX_AUTH_ROUTE_PARAM:\s*'([^']+)'""").find(jsConfig)?.groupValues?.get(1) ?: ""
@@ -106,24 +107,40 @@ class Kuramanime : MainAPI() {
         }
     }
 
-    private suspend fun getAccessToken(config: SiteConfig): String? {
+    private suspend fun getAccessToken(config: SiteConfig, referer: String): String? {
         val url = "$mainUrl/${config.prefix}${config.route}"
         val headers = browserHeaders + mapOf(
             "X-Fuck-ID" to "${config.key}:${config.token}",
             "X-Request-ID" to generateRandomString(6),
-            "X-Request-Index" to "0"
+            "X-Request-Index" to "0",
+            "Referer" to referer,
+            "X-Requested-With" to "XMLHttpRequest"
         )
         return app.get(url, headers = headers).text.trim()
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = browserHeaders).document
-        val title = document.selectFirst(".anime__details__title h3")?.text()?.trim() ?: ""
-        val poster = document.selectFirst(".anime__details__pic")?.attr("data-setbg")
-        val plot = document.selectFirst("#synopsisField")?.text()?.trim()
-        val genres = document.select(".breadcrumb__links__v2__tags a").map { it.text().trim().replace(",", "") }
+        val seriesUrl = when {
+            url.contains("/episode/") -> url.substringBefore("/episode/")
+            url.contains("/batch/") -> url.substringBefore("/batch/")
+            else -> url
+        }
 
-        val statusText = document.select(".anime__details__widget ul li:contains(Status)").text().lowercase()
+        val document = app.get(seriesUrl, headers = browserHeaders).document
+        val title = document.selectFirst(".anime__details__title h3")?.text()?.trim() ?: ""
+        val poster = document.selectFirst(".anime__details__pic")?.attr("data-setbg") ?:
+                     document.selectFirst(".anime__details__pic")?.attr("src") ?:
+                     document.selectFirst("meta[property=\"og:image\"]")?.attr("content") ?:
+                     document.selectFirst(".anime__details__pic img")?.attr("src")
+
+        val plot = document.selectFirst("#synopsisField")?.text()?.trim() ?:
+                   document.selectFirst(".anime__details__text p")?.text()?.trim() ?:
+                   document.selectFirst("meta[property=\"og:description\"]")?.attr("content")
+
+        val genres = document.select(".anime__details__widget ul li").find { it.text().contains("Genre", ignoreCase = true) }?.select("a")?.map { it.text().trim().replace(",", "") }?.filter { it.isNotEmpty() } ?:
+                     document.select(".breadcrumb__links__v2__tags a").map { it.text().trim().replace(",", "") }.filter { it.isNotEmpty() }
+
+        val statusText = document.select(".anime__details__widget ul li").find { it.text().contains("Status", ignoreCase = true) }?.text()?.lowercase() ?: ""
         val status = when {
             statusText.contains("ongoing") || statusText.contains("tayang") -> ShowStatus.Ongoing
             statusText.contains("finished") || statusText.contains("selesai") -> ShowStatus.Completed
@@ -134,18 +151,15 @@ class Kuramanime : MainAPI() {
 
         fun parseFromDoc(doc: Element) {
             // Try grid buttons
-            val buttons = doc.select("#animeEpisodes a.ep-button")
-            if (buttons.isNotEmpty()) {
-                buttons.forEach {
-                    val epHref = fixUrl(it.attr("href"))
-                    val epText = it.text().trim()
-                    val epNum = Regex("""Ep\s*(\d+)""").find(epText)?.groupValues?.get(1)?.toIntOrNull()
-                    if (episodes.none { e -> e.data == epHref }) {
-                        episodes.add(newEpisode(epHref) {
-                            this.episode = epNum
-                            this.name = "Episode $epNum"
-                        })
-                    }
+            doc.select("#animeEpisodes a.ep-button").forEach {
+                val epHref = fixUrl(it.attr("href"))
+                val epText = it.text().trim()
+                val epNum = Regex("""Ep\s*(\d+)""").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                if (episodes.none { e -> e.data == epHref }) {
+                    episodes.add(newEpisode(epHref) {
+                        this.episode = epNum
+                        this.name = "Episode $epNum"
+                    })
                 }
             }
 
@@ -172,18 +186,18 @@ class Kuramanime : MainAPI() {
         // Initial parse
         parseFromDoc(document)
 
-        // Pagination
+        // Pagination for episodes
         var currentPage = 2
         while (true) {
-            val pageUrl = if (url.contains("?")) "$url&page=$currentPage" else "$url?page=$currentPage"
+            val pageUrl = if (seriesUrl.contains("?")) "$seriesUrl&page=$currentPage" else "$seriesUrl?page=$currentPage"
             val pageDoc = app.get(pageUrl, headers = browserHeaders).document
             val beforeCount = episodes.size
             parseFromDoc(pageDoc)
-            if (episodes.size == beforeCount || currentPage > 50) break
+            if (episodes.size == beforeCount || currentPage > 60) break
             currentPage++
         }
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        return newAnimeLoadResponse(title, seriesUrl, TvType.Anime) {
             this.posterUrl = poster
             this.plot = plot
             this.tags = genres
@@ -198,36 +212,41 @@ class Kuramanime : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val config = getSiteConfig() ?: return false
-        val token = getAccessToken(config) ?: return false
-
         val document = app.get(data, headers = browserHeaders).document
+        val config = getSiteConfig(document) ?: return false
+        val token = getAccessToken(config, data) ?: return false
+
         val servers = document.select("#changeServer option").map { it.attr("value") }
+
+        val ajaxHeaders = browserHeaders + mapOf(
+            "X-Requested-With" to "XMLHttpRequest",
+            "Referer" to data
+        )
 
         servers.forEach { server ->
             val playerUrl = "$data?${config.pageTokenKey}=$token&${config.streamServerKey}=$server&page=1"
-            val playerDoc = app.get(playerUrl, headers = browserHeaders).document
+            val playerDoc = app.get(playerUrl, headers = ajaxHeaders).document
 
             // Standard extraction
-            if (server == "kuramadrive") {
-                val hlsSrc = playerDoc.selectFirst("#player")?.attr("data-hls-src")
-                if (hlsSrc != null) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "Kuramadrive S1",
-                            name = "Kuramadrive S1",
-                            url = hlsSrc,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            quality = Qualities.Unknown.value
-                            this.referer = playerUrl
-                        }
-                    )
-                }
-            } else {
-                playerDoc.select("iframe").forEach { iframe ->
-                    val src = iframe.attr("src")
-                    loadExtractor(src, data, subtitleCallback, callback)
+            val hlsSrc = playerDoc.selectFirst("#player")?.attr("data-hls-src")
+            if (hlsSrc != null) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Kuramadrive S1",
+                        name = "Kuramadrive S1",
+                        url = hlsSrc,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        quality = Qualities.Unknown.value
+                        this.referer = playerUrl
+                    }
+                )
+            }
+
+            playerDoc.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotEmpty()) {
+                    loadExtractor(src, playerUrl, subtitleCallback, callback)
                 }
             }
         }
