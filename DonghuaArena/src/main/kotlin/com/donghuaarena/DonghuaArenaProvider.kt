@@ -15,10 +15,9 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(LuluVid())
         registerExtractorAPI(LuluStream())
         registerExtractorAPI(MyVidPlay())
-        registerExtractorAPI(Byse())
-        registerExtractorAPI(ByseSejataos())
         registerExtractorAPI(TurboVid())
         registerExtractorAPI(Vidara())
+        registerExtractorAPI(VidaraSo())
         registerExtractorAPI(Playmogo())
 
         // Explicitly register common core extractors for better compatibility
@@ -28,6 +27,16 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(DoodstreamCom())
         registerExtractorAPI(StreamTape())
         registerExtractorAPI(MixDrop())
+
+        // Byse variants from core
+        registerExtractorAPI(Bysezejataos())
+        registerExtractorAPI(ByseBuho())
+        registerExtractorAPI(ByseQekaho())
+        registerExtractorAPI(ByseVepoin())
+
+        // VidHide from core
+        registerExtractorAPI(VidhideExtractor())
+        registerExtractorAPI(VidHidePro())
 
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())

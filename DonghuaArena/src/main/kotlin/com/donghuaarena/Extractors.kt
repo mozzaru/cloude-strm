@@ -34,7 +34,6 @@ open class SimpleUniversalExtractor : ExtractorApi() {
                     INFER_TYPE
                 ) {
                     this.referer = referer ?: url
-                    // Leave quality unset for M3U8 to allow auto-detection of resolution tracks
                 }
             )
         } else {
@@ -87,15 +86,14 @@ class LuluVid : SimpleUniversalExtractor() { override val name: String get() = "
 class LuluStream : SimpleUniversalExtractor() { override val name: String get() = "LuluStream"; override val mainUrl: String get() = "https://lulustream.com" }
 
 class MyVidPlay : DoodLaExtractor() {
-    override var name = "MyVidPlay"
+    override var name = "DoodStream"
     override var mainUrl = "https://myvidplay.com"
 }
 
-class Byse : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://byse.site" }
-class ByseSejataos : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://bysezejataos.com" }
 class TurboVid : SimpleUniversalExtractor() { override val name: String get() = "TurboVid"; override val mainUrl: String get() = "https://turbovid.eu" }
-class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl = "https://vidara.xyz" }
-class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl = "https://playmogo.com" }
+class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.xyz" }
+class VidaraSo : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.so" }
+class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl: String get() = "https://playmogo.com" }
 
 class ArchiveOrg : ExtractorApi() {
     override val name: String get() = "Archive.org"
