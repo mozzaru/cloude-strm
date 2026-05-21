@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 12
+version = 13
 
 cloudstream {
     description = "Nonton Donghua Subtitle Indonesia"
@@ -8,5 +8,5 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime")
     iconUrl = "https://donghuaarena.site/logo.png"
-    isCrossPlatform = false
+    isCrossPlatform = true
 }
