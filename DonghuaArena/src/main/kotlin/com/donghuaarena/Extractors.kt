@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.api.Log
+import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 
 open class SimpleUniversalExtractor : ExtractorApi() {
     override val name: String get() = "SimpleUniversal"
@@ -33,7 +34,7 @@ open class SimpleUniversalExtractor : ExtractorApi() {
                     INFER_TYPE
                 ) {
                     this.referer = referer ?: url
-                    this.quality = Qualities.Unknown.value
+                    // Leave quality unset for M3U8 to allow auto-detection of resolution tracks
                 }
             )
         } else {
@@ -52,7 +53,6 @@ open class SimpleUniversalExtractor : ExtractorApi() {
                             INFER_TYPE
                         ) {
                             this.referer = referer ?: url
-                            this.quality = Qualities.Unknown.value
                         }
                     )
                     return
@@ -71,7 +71,9 @@ open class SimpleUniversalExtractor : ExtractorApi() {
                         INFER_TYPE
                     ) {
                         this.referer = referer ?: url
-                        this.quality = Qualities.Unknown.value
+                        if (!link.contains(".m3u8")) {
+                            this.quality = Qualities.Unknown.value
+                        }
                     }
                 )
             }
@@ -83,13 +85,17 @@ class StreamHls : SimpleUniversalExtractor() { override val name: String get() =
 class LuluVdo : SimpleUniversalExtractor() { override val name: String get() = "LuluVdo"; override val mainUrl: String get() = "https://luluvdo.com" }
 class LuluVid : SimpleUniversalExtractor() { override val name: String get() = "LuluVid"; override val mainUrl: String get() = "https://luluvid.com" }
 class LuluStream : SimpleUniversalExtractor() { override val name: String get() = "LuluStream"; override val mainUrl: String get() = "https://lulustream.com" }
-class MyVidPlay : SimpleUniversalExtractor() { override val name: String get() = "MyVidPlay"; override val mainUrl: String get() = "https://myvidplay.com" }
+
+class MyVidPlay : DoodLaExtractor() {
+    override var name = "MyVidPlay"
+    override var mainUrl = "https://myvidplay.com"
+}
+
 class Byse : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://byse.site" }
 class ByseSejataos : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://bysezejataos.com" }
 class TurboVid : SimpleUniversalExtractor() { override val name: String get() = "TurboVid"; override val mainUrl: String get() = "https://turbovid.eu" }
-class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.xyz" }
-class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl: String get() = "https://playmogo.com" }
-class StreamRuby : SimpleUniversalExtractor() { override val name: String get() = "StreamRuby"; override val mainUrl: String get() = "https://streamruby.com" }
+class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl = "https://vidara.xyz" }
+class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl = "https://playmogo.com" }
 
 class ArchiveOrg : ExtractorApi() {
     override val name: String get() = "Archive.org"
@@ -97,7 +103,6 @@ class ArchiveOrg : ExtractorApi() {
     override val requiresReferer: Boolean get() = false
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        Log.d("ArchiveOrg", "getUrl: $url")
         callback.invoke(
             newExtractorLink(
                 this.name,
@@ -117,11 +122,9 @@ class DTube : ExtractorApi() {
     override val requiresReferer: Boolean get() = false
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        Log.d("DTube", "getUrl: $url")
         val videoId = url.split("?v=").lastOrNull()?.split("&")?.firstOrNull()
         if (videoId != null) {
             val m3u8 = "https://nas1.d.tube/videos/$videoId/master.m3u8"
-            Log.d("DTube", "Constructed m3u8: $m3u8")
             callback.invoke(
                 newExtractorLink(
                     this.name,
