@@ -6,17 +6,11 @@ import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 
-open class SimpleUniversalExtractor : ExtractorApi() {
-    override val name: String get() = "SimpleUniversal"
-    override val mainUrl: String get() = ""
+open class SimpleUniversalExtractor(override val name: String, override val mainUrl: String) : ExtractorApi() {
     override val requiresReferer: Boolean get() = true
 
-    companion object {
-        private const val TAG = "SimpleUniversalExt"
-    }
-
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        Log.d(TAG, "getUrl: $url referer: $referer")
+        Log.d("Universal", "getUrl: $url referer: $referer")
         val response = app.get(url, referer = referer, headers = mapOf("User-Agent" to USER_AGENT)).text
 
         // Try to find m3u8 in scripts
@@ -25,7 +19,7 @@ open class SimpleUniversalExtractor : ExtractorApi() {
 
         if (m3u8Match != null) {
             val link = m3u8Match.groupValues[1].replace("\\/", "/")
-            Log.d(TAG, "Found m3u8: $link")
+            Log.d("Universal", "Found m3u8: $link")
             callback.invoke(
                 newExtractorLink(
                     this.name,
@@ -43,7 +37,7 @@ open class SimpleUniversalExtractor : ExtractorApi() {
                 val packedMatch = m3u8Regex.find(unpacked)
                 if (packedMatch != null) {
                     val link = packedMatch.groupValues[1].replace("\\/", "/")
-                    Log.d(TAG, "Found m3u8 in packed: $link")
+                    Log.d("Universal", "Found m3u8 in packed: $link")
                     callback.invoke(
                         newExtractorLink(
                             this.name,
@@ -61,7 +55,7 @@ open class SimpleUniversalExtractor : ExtractorApi() {
             // Try generic video tag
             val videoRegex = """<video[^>]+src=["'](https?://[^"']+)["']""".toRegex()
             videoRegex.find(response)?.groupValues?.get(1)?.let { link ->
-                Log.d(TAG, "Found video src: $link")
+                Log.d("Universal", "Found video src: $link")
                 callback.invoke(
                     newExtractorLink(
                         this.name,
@@ -80,20 +74,19 @@ open class SimpleUniversalExtractor : ExtractorApi() {
     }
 }
 
-class StreamHls : SimpleUniversalExtractor() { override val name: String get() = "StreamHls"; override val mainUrl: String get() = "https://streamhls.my.id" }
-class LuluVdo : SimpleUniversalExtractor() { override val name: String get() = "LuluVdo"; override val mainUrl: String get() = "https://luluvdo.com" }
-class LuluVid : SimpleUniversalExtractor() { override val name: String get() = "LuluVid"; override val mainUrl: String get() = "https://luluvid.com" }
-class LuluStream : SimpleUniversalExtractor() { override val name: String get() = "LuluStream"; override val mainUrl: String get() = "https://lulustream.com" }
+class StreamHls : SimpleUniversalExtractor("StreamHls", "https://streamhls.my.id")
+class LuluVid : SimpleUniversalExtractor("LuluVid", "https://luluvid.com")
+class LuluVdo : SimpleUniversalExtractor("LuluVdo", "https://luluvdo.com")
+class TurboVid : SimpleUniversalExtractor("TurboVid", "https://turbovid.eu")
+class Vidara : SimpleUniversalExtractor("Vidara", "https://vidara.xyz")
+class VidaraSo : SimpleUniversalExtractor("Vidara", "https://vidara.so")
+class Playmogo : SimpleUniversalExtractor("Playmogo", "https://playmogo.com")
+class ByseFallback : SimpleUniversalExtractor("Byse", "https://bysezejataos.com")
 
 class MyVidPlay : DoodLaExtractor() {
-    override var name = "DoodStream"
-    override var mainUrl = "https://myvidplay.com"
+    override var name: String = "DoodStream"
+    override var mainUrl: String = "https://myvidplay.com"
 }
-
-class TurboVid : SimpleUniversalExtractor() { override val name: String get() = "TurboVid"; override val mainUrl: String get() = "https://turbovid.eu" }
-class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.xyz" }
-class VidaraSo : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.so" }
-class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl: String get() = "https://playmogo.com" }
 
 class ArchiveOrg : ExtractorApi() {
     override val name: String get() = "Archive.org"
