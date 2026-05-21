@@ -117,17 +117,30 @@ class DonghuaArena : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Fetch the main video_url from episodes API
-        val episode = app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>().firstOrNull()
+        android.util.Log.d("DonghuaArena", "=== loadLinks called with episode_id: $data ===")
+
+        // Fetch video_url utama dari episode
+        val episode = app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}")
+            .parsed<Array<EpisodeItem>>().firstOrNull()
+
+        android.util.Log.d("DonghuaArena", "video_url dari episode: ${episode?.videoUrl}")
+
         episode?.videoUrl?.let {
-            loadExtractor(it, subtitleCallback, callback)
+            android.util.Log.d("DonghuaArena", "Mencoba loadExtractor untuk video_url: $it")
+            loadExtractor(it, mainUrl, subtitleCallback, callback)
         }
 
-        // Also fetch from servers API
-        val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
+        // Fetch server tambahan
+        val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}")
+            .parsed<Array<ServerItem>>()
+
+        android.util.Log.d("DonghuaArena", "Jumlah server dari API: ${servers.size}")
+
         servers.forEach { server ->
+            android.util.Log.d("DonghuaArena", "Server ditemukan => name: ${server.name} | url: ${server.url}")
             server.url?.let {
-                loadExtractor(it, subtitleCallback, callback)
+                android.util.Log.d("DonghuaArena", "Mencoba loadExtractor untuk server url: $it")
+                loadExtractor(it, mainUrl, subtitleCallback, callback)
             }
         }
 

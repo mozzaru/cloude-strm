@@ -18,7 +18,14 @@ abstract class SimpleUniversalExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val res = app.get(url, referer = referer).text
+        android.util.Log.d("DonghuaArena", "[$name] getUrl dipanggil => $url")
+
+        val res = try {
+            app.get(url, referer = referer).text
+        } catch (e: Exception) {
+            android.util.Log.e("DonghuaArena", "[$name] Gagal fetch url: $url | error: ${e.message}")
+            return
+        }
 
         val mediaUrl = Regex("file:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
             ?: Regex("src:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
@@ -26,12 +33,18 @@ abstract class SimpleUniversalExtractor : ExtractorApi() {
             ?: Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
             ?: Regex("file:\"(.*?\\.mp4.*?)\"").find(res)?.groupValues?.get(1)
 
+        android.util.Log.d("DonghuaArena", "[$name] mediaUrl ditemukan: $mediaUrl")
+
         if (mediaUrl != null) {
             val finalUrl = if (mediaUrl.startsWith("http")) mediaUrl else {
                 val base = url.substringBeforeLast("/")
-                if (mediaUrl.startsWith("/")) url.substringBefore("/", "https://" + url.substringAfter("://").substringBefore("/")) + mediaUrl
+                if (mediaUrl.startsWith("/"))
+                    url.substringBefore("/", "https://" + url.substringAfter("://").substringBefore("/")) + mediaUrl
                 else "$base/$mediaUrl"
             }
+
+            android.util.Log.d("DonghuaArena", "[$name] finalUrl: $finalUrl")
+
             callback(
                 newExtractorLink(
                     name,
@@ -43,6 +56,8 @@ abstract class SimpleUniversalExtractor : ExtractorApi() {
                     this.referer = url
                 }
             )
+        } else {
+            android.util.Log.w("DonghuaArena", "[$name] mediaUrl TIDAK ditemukan di halaman: $url")
         }
     }
 }
@@ -87,6 +102,17 @@ class Playmogo : SimpleUniversalExtractor() {
     override val mainUrl = "https://playmogo.com"
 }
 
+// Tambahan baru dari HTML
+class Streamtape : SimpleUniversalExtractor() {
+    override val name = "Streamtape"
+    override val mainUrl = "https://streamtape.com"
+}
+
+class DoodStream : SimpleUniversalExtractor() {
+    override val name = "DoodStream"
+    override val mainUrl = "https://doodstream.com"
+}
+
 class ArchiveOrg : ExtractorApi() {
     override val mainUrl = "https://archive.org"
     override val requiresReferer = false
@@ -98,13 +124,20 @@ class ArchiveOrg : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val res = app.get(url).text
-        val doc = app.get(url).document
+        android.util.Log.d("DonghuaArena", "[ArchiveOrg] getUrl dipanggil => $url")
+
+        val doc = try {
+            app.get(url).document
+        } catch (e: Exception) {
+            android.util.Log.e("DonghuaArena", "[ArchiveOrg] Gagal fetch: ${e.message}")
+            return
+        }
 
         doc.select("a[href*=\"/download/\"]").forEach {
             val href = it.attr("href")
-            val mediaUrl = if (href.startsWith("http")) href else "https://archive.org" + href
+            val mediaUrl = if (href.startsWith("http")) href else "https://archive.org$href"
             val label = it.text()
+            android.util.Log.d("DonghuaArena", "[ArchiveOrg] link ditemukan: $mediaUrl")
             callback(
                 newExtractorLink(
                     name,
@@ -112,9 +145,11 @@ class ArchiveOrg : ExtractorApi() {
                     mediaUrl,
                     if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
-                                   else if (mediaUrl.contains("720")) Qualities.P720.value
-                                   else Qualities.Unknown.value
+                    this.quality = when {
+                        mediaUrl.contains("1080") -> Qualities.P1080.value
+                        mediaUrl.contains("720") -> Qualities.P720.value
+                        else -> Qualities.Unknown.value
+                    }
                     this.referer = url
                 }
             )
@@ -122,7 +157,8 @@ class ArchiveOrg : ExtractorApi() {
 
         doc.select("source[src*=\"/download/\"]").forEach {
             val src = it.attr("src")
-            val mediaUrl = if (src.startsWith("http")) src else "https://archive.org" + src
+            val mediaUrl = if (src.startsWith("http")) src else "https://archive.org$src"
+            android.util.Log.d("DonghuaArena", "[ArchiveOrg] source ditemukan: $mediaUrl")
             callback(
                 newExtractorLink(
                     name,
@@ -130,9 +166,11 @@ class ArchiveOrg : ExtractorApi() {
                     mediaUrl,
                     if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
-                                   else if (mediaUrl.contains("720")) Qualities.P720.value
-                                   else Qualities.Unknown.value
+                    this.quality = when {
+                        mediaUrl.contains("1080") -> Qualities.P1080.value
+                        mediaUrl.contains("720") -> Qualities.P720.value
+                        else -> Qualities.Unknown.value
+                    }
                     this.referer = url
                 }
             )
@@ -142,7 +180,8 @@ class ArchiveOrg : ExtractorApi() {
             if (playlist.isNotBlank()) {
                 Regex("\"file\":\"(.*?)\"").findAll(playlist).forEach {
                     val file = it.groupValues[1]
-                    val mediaUrl = if (file.startsWith("http")) file else "https://archive.org" + file
+                    val mediaUrl = if (file.startsWith("http")) file else "https://archive.org$file"
+                    android.util.Log.d("DonghuaArena", "[ArchiveOrg] playlist file: $mediaUrl")
                     callback(
                         newExtractorLink(
                             name,
@@ -150,9 +189,11 @@ class ArchiveOrg : ExtractorApi() {
                             mediaUrl,
                             if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
-                            this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
-                                           else if (mediaUrl.contains("720")) Qualities.P720.value
-                                           else Qualities.Unknown.value
+                            this.quality = when {
+                                mediaUrl.contains("1080") -> Qualities.P1080.value
+                                mediaUrl.contains("720") -> Qualities.P720.value
+                                else -> Qualities.Unknown.value
+                            }
                             this.referer = url
                         }
                     )
@@ -187,14 +228,24 @@ class DTube : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        android.util.Log.d("DonghuaArena", "[DTube] getUrl dipanggil => $url")
+
         val rawId = if (url.contains("?v=")) {
             url.substringAfter("?v=").substringBefore("&")
         } else {
             url.substringAfterLast("/")
         }
-        if (rawId.isBlank()) return
+
+        if (rawId.isBlank()) {
+            android.util.Log.w("DonghuaArena", "[DTube] rawId kosong, skip")
+            return
+        }
+
         val videoId = if (rawId.contains("-")) rawId else base58ToUuid(rawId)
         val videoUrl = "https://nas1.d.tube/videos/$videoId/master.m3u8"
+
+        android.util.Log.d("DonghuaArena", "[DTube] videoId: $videoId | videoUrl: $videoUrl")
+
         callback(
             newExtractorLink(
                 name,

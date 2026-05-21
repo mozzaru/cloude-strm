@@ -17,5 +17,7 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(Playmogo())
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())
+        registerExtractorAPI(Streamtape())
+        registerExtractorAPI(DoodStream())
     }
 }
