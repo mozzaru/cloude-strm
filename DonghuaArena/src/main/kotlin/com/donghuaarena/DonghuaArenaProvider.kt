@@ -13,6 +13,7 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(LuluStream())
         registerExtractorAPI(MyVidPlay())
         registerExtractorAPI(Byse())
+        registerExtractorAPI(ByseSejataos())
         registerExtractorAPI(TurboVid())
         registerExtractorAPI(Vidara())
         registerExtractorAPI(Playmogo())

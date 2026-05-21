@@ -16,7 +16,7 @@ open class SimpleUniversalExtractor : ExtractorApi() {
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         Log.d(TAG, "getUrl: $url referer: $referer")
-        val response = app.get(url, referer = referer).text
+        val response = app.get(url, referer = referer, headers = mapOf("User-Agent" to USER_AGENT)).text
 
         // Try to find m3u8 in scripts
         val m3u8Regex = """["'](https?://[^"']+\.m3u8[^"']*)["']""".toRegex()
@@ -85,6 +85,7 @@ class LuluVid : SimpleUniversalExtractor() { override val name: String get() = "
 class LuluStream : SimpleUniversalExtractor() { override val name: String get() = "LuluStream"; override val mainUrl: String get() = "https://lulustream.com" }
 class MyVidPlay : SimpleUniversalExtractor() { override val name: String get() = "MyVidPlay"; override val mainUrl: String get() = "https://myvidplay.com" }
 class Byse : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://byse.site" }
+class ByseSejataos : SimpleUniversalExtractor() { override val name: String get() = "Byse"; override val mainUrl: String get() = "https://bysezejataos.com" }
 class TurboVid : SimpleUniversalExtractor() { override val name: String get() = "TurboVid"; override val mainUrl: String get() = "https://turbovid.eu" }
 class Vidara : SimpleUniversalExtractor() { override val name: String get() = "Vidara"; override val mainUrl: String get() = "https://vidara.xyz" }
 class Playmogo : SimpleUniversalExtractor() { override val name: String get() = "Playmogo"; override val mainUrl: String get() = "https://playmogo.com" }
