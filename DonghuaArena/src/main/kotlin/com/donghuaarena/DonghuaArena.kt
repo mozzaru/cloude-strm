@@ -96,7 +96,7 @@ class DonghuaArena : MainAPI() {
         Log.d(TAG, "episodes fetched: ${episodesRaw.size}")
 
         val episodes = episodesRaw
-            .sortedBy { it.episodeNumber }
+            .sortedByDescending { it.episodeNumber }
             .map { ep ->
                 val epData = "${ep.id}|${ep.videoUrl ?: ""}"
                 newEpisode(epData) {
@@ -128,8 +128,11 @@ class DonghuaArena : MainAPI() {
     ): Boolean {
         Log.d(TAG, "loadLinks: $data")
         val parts = data.split("|")
-        val id = parts.getOrNull(0)
+        var epId = parts.getOrNull(0)
         val primaryUrl = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+
+        // Strip mainUrl if it was prepended automatically
+        epId = epId?.removePrefix("$mainUrl/")
 
         // 1. Load from primary video_url
         primaryUrl?.let {
@@ -138,12 +141,12 @@ class DonghuaArena : MainAPI() {
         }
 
         // 2. Load from alternative mirrors
-        id?.let { epId ->
-            val servers = app.get("$mainUrl/api/servers?episode_id=$epId&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
+        epId?.let { id ->
+            val servers = app.get("$mainUrl/api/servers?episode_id=$id&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
             Log.d(TAG, "alternative mirrors fetched: ${servers.size}")
             for (server in servers) {
                 server.url?.let {
-                    if (it != primaryUrl) {
+                    if (!it.equals(primaryUrl, ignoreCase = true)) {
                         Log.d(TAG, "loading alternative mirror: $it")
                         loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
                     }
