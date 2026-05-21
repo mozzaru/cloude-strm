@@ -9,120 +9,92 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.math.BigInteger
 
-class StreamHls : ExtractorApi() {
+abstract class SimpleUniversalExtractor : ExtractorApi() {
+    override val requiresReferer = true
+
+    suspend fun sendExtractorLink(
+        link: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit,
+        name: String = this.name,
+        quality: Int = Qualities.Unknown.value
+    ) {
+        callback(
+            newExtractorLink(
+                this.name,
+                name,
+                link,
+                if (link.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
+                this.quality = quality
+                this.referer = referer
+            }
+        )
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val res = app.get(url, referer = referer).text
+
+        val mediaUrl = Regex("file:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
+            ?: Regex("src:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
+            ?: Regex("file\\s*:\\s*'(.*?\\.m3u8.*?)'").find(res)?.groupValues?.get(1)
+            ?: Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
+            ?: Regex("file:\"(.*?\\.mp4.*?)\"").find(res)?.groupValues?.get(1)
+
+        if (mediaUrl != null) {
+            val finalUrl = if (mediaUrl.startsWith("http")) mediaUrl else {
+                val base = url.substringBeforeLast("/")
+                if (mediaUrl.startsWith("/")) url.substringBefore("/", "https://" + url.substringAfter("://").substringBefore("/")) + mediaUrl
+                else "$base/$mediaUrl"
+            }
+            sendExtractorLink(finalUrl, url, callback)
+        }
+    }
+}
+
+class StreamHls : SimpleUniversalExtractor() {
     override val name = "StreamHLS"
     override val mainUrl = "https://streamhls.to"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val res = app.get(url, referer = referer).text
-        val m3u8 = Regex("file:\"(.*?\\.m3u8)\"").find(res)?.groupValues?.get(1)
-        if (m3u8 != null) {
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    m3u8,
-                    ExtractorLinkType.M3U8
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = url
-                }
-            )
-        }
-    }
 }
 
-class LuluVdo : ExtractorApi() {
+class LuluVdo : SimpleUniversalExtractor() {
     override val name = "LuluVdo"
     override val mainUrl = "https://luluvdo.com"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val res = app.get(url, referer = referer).text
-        val m3u8 = Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
-        if (m3u8 != null) {
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    m3u8,
-                    if (m3u8.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = url
-                }
-            )
-        }
-    }
 }
 
-class MyVidPlay : ExtractorApi() {
+class LuluVid : SimpleUniversalExtractor() {
+    override val name = "LuluVid"
+    override val mainUrl = "https://luluvid.com"
+}
+
+class MyVidPlay : SimpleUniversalExtractor() {
     override val name = "MyVidPlay"
     override val mainUrl = "https://myvidplay.com"
-    override val requiresReferer = true
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val res = app.get(url, referer = referer).text
-        val m3u8 = Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
-        if (m3u8 != null) {
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    m3u8,
-                    if (m3u8.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = url
-                }
-            )
-        }
-    }
 }
 
-class Byse : ExtractorApi() {
+class Byse : SimpleUniversalExtractor() {
     override val name = "Byse"
     override val mainUrl = "https://bysezejataos.com"
-    override val requiresReferer = true
+}
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val res = app.get(url, referer = referer).text
-        val m3u8 = Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
-        if (m3u8 != null) {
-            callback(
-                newExtractorLink(
-                    name,
-                    name,
-                    m3u8,
-                    if (m3u8.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = url
-                }
-            )
-        }
-    }
+class TurboVid : SimpleUniversalExtractor() {
+    override val name = "TurboVid"
+    override val mainUrl = "https://turbovidhls.com"
+}
+
+class Vidara : SimpleUniversalExtractor() {
+    override val name = "Vidara"
+    override val mainUrl = "https://vidara.so"
+}
+
+class Playmogo : SimpleUniversalExtractor() {
+    override val name = "Playmogo"
+    override val mainUrl = "https://playmogo.com"
 }
 
 class ArchiveOrg : ExtractorApi() {
@@ -136,43 +108,49 @@ class ArchiveOrg : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val res = app.get(url).text
         val doc = app.get(url).document
 
         doc.select("a[href*=\"/download/\"]").forEach {
-            val mediaUrl = mainUrl + it.attr("href")
-            if (mediaUrl.endsWith(".mp4") || mediaUrl.endsWith(".mkv")) {
-                val quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
-                             else if (mediaUrl.contains("720")) Qualities.P720.value
-                             else Qualities.Unknown.value
-
-                callback(
-                    newExtractorLink(
-                        name,
-                        it.text().ifBlank { name },
-                        mediaUrl,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = quality
-                        this.referer = url
-                    }
-                )
-            }
+            val href = it.attr("href")
+            val mediaUrl = if (href.startsWith("http")) href else "https://archive.org" + href
+            handleMedia(mediaUrl, it.text(), url, callback)
         }
 
-        if (doc.select("a[href*=\"/download/\"]").isEmpty()) {
-            doc.select("meta[property=\"og:video\"]").firstOrNull()?.attr("content")?.let { mediaUrl ->
-                callback(
-                    newExtractorLink(
-                        name,
-                        name,
-                        mediaUrl,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = Qualities.Unknown.value
-                        this.referer = url
-                    }
-                )
+        doc.select("source[src*=\"/download/\"]").forEach {
+            val src = it.attr("src")
+            val mediaUrl = if (src.startsWith("http")) src else "https://archive.org" + src
+            handleMedia(mediaUrl, name, url, callback)
+        }
+
+        doc.select("play-av").attr("playlist").let { playlist ->
+            if (playlist.isNotBlank()) {
+                Regex("\"file\":\"(.*?)\"").findAll(playlist).forEach {
+                    val file = it.groupValues[1]
+                    val mediaUrl = if (file.startsWith("http")) file else "https://archive.org" + file
+                    handleMedia(mediaUrl, name, url, callback)
+                }
             }
+        }
+    }
+
+    private suspend fun handleMedia(mediaUrl: String, label: String, referer: String, callback: (ExtractorLink) -> Unit) {
+        if (mediaUrl.endsWith(".mp4") || mediaUrl.endsWith(".mkv") || mediaUrl.endsWith(".m3u8")) {
+            val quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
+                         else if (mediaUrl.contains("720")) Qualities.P720.value
+                         else Qualities.Unknown.value
+
+            callback(
+                newExtractorLink(
+                    name,
+                    label.ifBlank { name },
+                    mediaUrl,
+                    if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = quality
+                    this.referer = referer
+                }
+            )
         }
     }
 }
