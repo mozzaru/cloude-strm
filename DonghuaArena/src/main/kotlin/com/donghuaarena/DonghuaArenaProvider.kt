@@ -7,5 +7,11 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class DonghuaArenaProvider: Plugin() {
     override fun load() {
         registerMainAPI(DonghuaArena())
+        registerExtractorAPI(StreamHls())
+        registerExtractorAPI(LuluVdo())
+        registerExtractorAPI(MyVidPlay())
+        registerExtractorAPI(Byse())
+        registerExtractorAPI(ArchiveOrg())
+        registerExtractorAPI(DTube())
     }
 }
