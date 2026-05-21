@@ -3,6 +3,7 @@ package com.donghuaarena
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.annotation.JsonProperty
+import android.util.Log
 
 data class DonghuaItem(
     @JsonProperty("id") val id: String? = null,
@@ -45,6 +46,7 @@ class DonghuaArena : MainAPI() {
 
     companion object {
         private var genreMap: Map<Int, String>? = null
+        private const val TAG = "DonghuaArena"
     }
 
     override val mainPage = mainPageOf(
@@ -80,6 +82,7 @@ class DonghuaArena : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        Log.d(TAG, "Loading URL: $url")
         val id = url.removePrefix("$mainUrl/anime/")
         val item = app.get("$mainUrl/api/donghuas/$id").parsed<DonghuaItem>()
 
@@ -87,6 +90,8 @@ class DonghuaArena : MainAPI() {
         val genres = item.genres?.mapNotNull { genreMap[it] }
 
         val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>()
+        Log.d(TAG, "Fetched ${episodesRaw.size} episodes")
+
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
             .map { ep ->
@@ -118,21 +123,25 @@ class DonghuaArena : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d(TAG, "loadLinks data: $data")
         val parts = data.split("|")
         val id = parts.getOrNull(0)
         val primaryUrl = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
 
         // 1. Load from primary video_url
         primaryUrl?.let {
+            Log.d(TAG, "Loading primary URL: $it")
             loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
         }
 
         // 2. Load from alternative mirrors
         id?.let { epId ->
             val servers = app.get("$mainUrl/api/servers?episode_id=$epId&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
-            servers.forEach { server ->
+            Log.d(TAG, "Fetched ${servers.size} alternative servers")
+            for (server in servers) {
                 server.url?.let {
                     if (it != primaryUrl) {
+                        Log.d(TAG, "Loading mirror URL: $it")
                         loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
                     }
                 }
@@ -145,35 +154,31 @@ class DonghuaArena : MainAPI() {
     private fun DonghuaItem.toSearchResponse(): SearchResponse {
         val isCompleted = status.equals("End", true) || status.equals("Completed", true)
         val statusLabel = if (isCompleted) " (Completed)" else ""
-        val title = (this.title ?: "") + statusLabel
+
+        val days = releaseDay?.toString()?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { d ->
+            when (d.trim()) {
+                "1" -> "Senin"
+                "2" -> "Selasa"
+                "3" -> "Rabu"
+                "4" -> "Kamis"
+                "5" -> "Jumat"
+                "6" -> "Sabtu"
+                "7" -> "Minggu"
+                else -> null
+            }
+        }?.joinToString(", ")
+
+        val schedule = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
+            if (!releaseTime.isNullOrBlank()) " [$days | $releaseTime]" else " [$days]"
+        } else ""
+
+        val title = (this.title ?: "") + statusLabel + schedule
         val href = "$mainUrl/anime/${this.id}"
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = this@toSearchResponse.posterUrl
-
-            val days = releaseDay?.toString()?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { d ->
-                when (d.trim()) {
-                    "1" -> "Senin"
-                    "2" -> "Selasa"
-                    "3" -> "Rabu"
-                    "4" -> "Kamis"
-                    "5" -> "Jumat"
-                    "6" -> "Sabtu"
-                    "7" -> "Minggu"
-                    else -> null
-                }
-            }?.joinToString(", ")
-
-            val info = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
-                if (!releaseTime.isNullOrBlank()) "$days | $releaseTime" else days
-            } else null
-
-            val badge = buildString {
-                append("SUB")
-                if (eps != null && eps > 0) append(" | Eps $eps")
-                if (info != null) append(" | $info")
-            }
-            addDubStatus(badge)
+            addDubStatus(DubStatus.Subbed)
+            eps?.let { addSub(it) }
         }
     }
 }

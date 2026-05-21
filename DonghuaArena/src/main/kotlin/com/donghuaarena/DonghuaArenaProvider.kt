@@ -17,11 +17,6 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(Vidara())
         registerExtractorAPI(Playmogo())
         registerExtractorAPI(StreamRuby())
-        registerExtractorAPI(StreamRubyNet())
-        registerExtractorAPI(StreamRubyHub())
-        registerExtractorAPI(MixDrop())
-        registerExtractorAPI(MixDropClick())
-        registerExtractorAPI(StreamTape())
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())
     }
