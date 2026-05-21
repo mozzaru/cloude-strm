@@ -9,8 +9,12 @@ class DonghuaArenaProvider: Plugin() {
         registerMainAPI(DonghuaArena())
         registerExtractorAPI(StreamHls())
         registerExtractorAPI(LuluVdo())
+        registerExtractorAPI(LuluVid())
         registerExtractorAPI(MyVidPlay())
         registerExtractorAPI(Byse())
+        registerExtractorAPI(TurboVid())
+        registerExtractorAPI(Vidara())
+        registerExtractorAPI(Playmogo())
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())
     }
