@@ -12,26 +12,6 @@ import java.math.BigInteger
 abstract class SimpleUniversalExtractor : ExtractorApi() {
     override val requiresReferer = true
 
-    suspend fun sendExtractorLink(
-        link: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit,
-        name: String = this.name,
-        quality: Int = Qualities.Unknown.value
-    ) {
-        callback(
-            newExtractorLink(
-                this.name,
-                name,
-                link,
-                if (link.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            ) {
-                this.quality = quality
-                this.referer = referer
-            }
-        )
-    }
-
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -52,7 +32,17 @@ abstract class SimpleUniversalExtractor : ExtractorApi() {
                 if (mediaUrl.startsWith("/")) url.substringBefore("/", "https://" + url.substringAfter("://").substringBefore("/")) + mediaUrl
                 else "$base/$mediaUrl"
             }
-            sendExtractorLink(finalUrl, url, callback)
+            callback(
+                newExtractorLink(
+                    name,
+                    name,
+                    finalUrl,
+                    if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = Qualities.Unknown.value
+                    this.referer = url
+                }
+            )
         }
     }
 }
@@ -114,32 +104,7 @@ class ArchiveOrg : ExtractorApi() {
         doc.select("a[href*=\"/download/\"]").forEach {
             val href = it.attr("href")
             val mediaUrl = if (href.startsWith("http")) href else "https://archive.org" + href
-            handleMedia(mediaUrl, it.text(), url, callback)
-        }
-
-        doc.select("source[src*=\"/download/\"]").forEach {
-            val src = it.attr("src")
-            val mediaUrl = if (src.startsWith("http")) src else "https://archive.org" + src
-            handleMedia(mediaUrl, name, url, callback)
-        }
-
-        doc.select("play-av").attr("playlist").let { playlist ->
-            if (playlist.isNotBlank()) {
-                Regex("\"file\":\"(.*?)\"").findAll(playlist).forEach {
-                    val file = it.groupValues[1]
-                    val mediaUrl = if (file.startsWith("http")) file else "https://archive.org" + file
-                    handleMedia(mediaUrl, name, url, callback)
-                }
-            }
-        }
-    }
-
-    private suspend fun handleMedia(mediaUrl: String, label: String, referer: String, callback: (ExtractorLink) -> Unit) {
-        if (mediaUrl.endsWith(".mp4") || mediaUrl.endsWith(".mkv") || mediaUrl.endsWith(".m3u8")) {
-            val quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
-                         else if (mediaUrl.contains("720")) Qualities.P720.value
-                         else Qualities.Unknown.value
-
+            val label = it.text()
             callback(
                 newExtractorLink(
                     name,
@@ -147,10 +112,52 @@ class ArchiveOrg : ExtractorApi() {
                     mediaUrl,
                     if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = quality
-                    this.referer = referer
+                    this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
+                                   else if (mediaUrl.contains("720")) Qualities.P720.value
+                                   else Qualities.Unknown.value
+                    this.referer = url
                 }
             )
+        }
+
+        doc.select("source[src*=\"/download/\"]").forEach {
+            val src = it.attr("src")
+            val mediaUrl = if (src.startsWith("http")) src else "https://archive.org" + src
+            callback(
+                newExtractorLink(
+                    name,
+                    name,
+                    mediaUrl,
+                    if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
+                                   else if (mediaUrl.contains("720")) Qualities.P720.value
+                                   else Qualities.Unknown.value
+                    this.referer = url
+                }
+            )
+        }
+
+        doc.select("play-av").attr("playlist").let { playlist ->
+            if (playlist.isNotBlank()) {
+                Regex("\"file\":\"(.*?)\"").findAll(playlist).forEach {
+                    val file = it.groupValues[1]
+                    val mediaUrl = if (file.startsWith("http")) file else "https://archive.org" + file
+                    callback(
+                        newExtractorLink(
+                            name,
+                            name,
+                            mediaUrl,
+                            if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = if (mediaUrl.contains("1080")) Qualities.P1080.value
+                                           else if (mediaUrl.contains("720")) Qualities.P720.value
+                                           else Qualities.Unknown.value
+                            this.referer = url
+                        }
+                    )
+                }
+            }
         }
     }
 }
