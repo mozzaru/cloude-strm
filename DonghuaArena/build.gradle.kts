@@ -1,8 +1,8 @@
 // use an integer for version numbers
-version = 1
+version = 2
 
 cloudstream {
-    description = "Nonton Donghua Subtitle Indonesia Gratis Selamanya"
+    description = "Nonton Donghua Subtitle Indonesia"
     language    = "id"
     authors = listOf("mozzaru")
     status = 1
