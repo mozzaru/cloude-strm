@@ -27,11 +27,11 @@ abstract class SimpleUniversalExtractor : ExtractorApi() {
             return
         }
 
-        val mediaUrl = Regex("file:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
-            ?: Regex("src:\"(.*?\\.m3u8.*?)\"").find(res)?.groupValues?.get(1)
-            ?: Regex("file\\s*:\\s*'(.*?\\.m3u8.*?)'").find(res)?.groupValues?.get(1)
-            ?: Regex("sources:\\[\\{file:\"(.*?)\"").find(res)?.groupValues?.get(1)
-            ?: Regex("file:\"(.*?\\.mp4.*?)\"").find(res)?.groupValues?.get(1)
+        val mediaUrl = Regex("""file\s*[=:]\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(res)?.groupValues?.get(1)
+            ?: Regex("""src\s*[=:]\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(res)?.groupValues?.get(1)
+            ?: Regex("""source\s*[=:]\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(res)?.groupValues?.get(1)
+            ?: Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(res)?.groupValues?.get(1)
+            ?: Regex("""file\s*[=:]\s*["'](https?://[^"']+\.mp4[^"']*)["']""").find(res)?.groupValues?.get(1)
 
         android.util.Log.d("DonghuaArena", "[$name] mediaUrl ditemukan: $mediaUrl")
 
@@ -102,7 +102,6 @@ class Playmogo : SimpleUniversalExtractor() {
     override val mainUrl = "https://playmogo.com"
 }
 
-// Tambahan baru dari HTML
 class Streamtape : SimpleUniversalExtractor() {
     override val name = "Streamtape"
     override val mainUrl = "https://streamtape.com"

@@ -90,7 +90,8 @@ class DonghuaArena : MainAPI() {
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
             .map { ep ->
-                newEpisode(ep.id) {
+                val episodeData = ep.id
+                newEpisode(episodeData) {
                     this.name = "Episode ${ep.episodeNumber}"
                     this.episode = ep.episodeNumber
                 }
@@ -119,27 +120,27 @@ class DonghuaArena : MainAPI() {
     ): Boolean {
         android.util.Log.d("DonghuaArena", "=== loadLinks called with episode_id: $data ===")
 
-        // Fetch video_url utama dari episode
-        val episode = app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}")
-            .parsed<Array<EpisodeItem>>().firstOrNull()
+        val episodeList = app.get("$mainUrl/api/episodes?donghua_id=${data.substringBeforeLast("-")}&t=${System.currentTimeMillis()}")
+            .parsed<Array<EpisodeItem>>()
+
+        val episode = episodeList.firstOrNull { it.id == data }
+            ?: app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}")
+                .parsed<Array<EpisodeItem>>().firstOrNull()
 
         android.util.Log.d("DonghuaArena", "video_url dari episode: ${episode?.videoUrl}")
 
         episode?.videoUrl?.let {
-            android.util.Log.d("DonghuaArena", "Mencoba loadExtractor untuk video_url: $it")
             loadExtractor(it, mainUrl, subtitleCallback, callback)
         }
 
-        // Fetch server tambahan
         val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}")
             .parsed<Array<ServerItem>>()
 
         android.util.Log.d("DonghuaArena", "Jumlah server dari API: ${servers.size}")
 
         servers.forEach { server ->
-            android.util.Log.d("DonghuaArena", "Server ditemukan => name: ${server.name} | url: ${server.url}")
+            android.util.Log.d("DonghuaArena", "Server => name: ${server.name} | url: ${server.url}")
             server.url?.let {
-                android.util.Log.d("DonghuaArena", "Mencoba loadExtractor untuk server url: $it")
                 loadExtractor(it, mainUrl, subtitleCallback, callback)
             }
         }
