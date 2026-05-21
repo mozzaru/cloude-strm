@@ -43,6 +43,10 @@ class DonghuaArena : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime)
 
+    companion object {
+        private var genreMap: Map<Int, String>? = null
+    }
+
     override val mainPage = mainPageOf(
         "api/donghuas" to "Terbaru"
     )
@@ -65,8 +69,11 @@ class DonghuaArena : MainAPI() {
     }
 
     private suspend fun getGenres(): Map<Int, String> {
+        genreMap?.let { return it }
         return try {
-            app.get("$mainUrl/api/genres").parsed<Array<GenreItem>>().associate { it.id to it.name }
+            val genres = app.get("$mainUrl/api/genres").parsed<Array<GenreItem>>().associate { it.id to it.name }
+            genreMap = genres
+            genres
         } catch (e: Exception) {
             emptyMap()
         }
@@ -86,7 +93,6 @@ class DonghuaArena : MainAPI() {
                 newEpisode(ep.id) {
                     this.name = "Episode ${ep.episodeNumber}"
                     this.episode = ep.episodeNumber
-                    this.data = ep.videoUrl ?: ""
                 }
             }
 
@@ -111,16 +117,17 @@ class DonghuaArena : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data is the videoUrl from episode or the episode ID to fetch servers
-        if (data.startsWith("http")) {
-            loadExtractor(data, "$mainUrl/", subtitleCallback, callback)
+        // Fetch the main video_url from episodes API
+        val episode = app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>().firstOrNull()
+        episode?.videoUrl?.let {
+            loadExtractor(it, subtitleCallback, callback)
         }
 
         // Also fetch from servers API
         val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
         servers.forEach { server ->
             server.url?.let {
-                loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
+                loadExtractor(it, subtitleCallback, callback)
             }
         }
 
