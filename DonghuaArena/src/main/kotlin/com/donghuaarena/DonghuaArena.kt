@@ -129,12 +129,15 @@ class DonghuaArena : MainAPI() {
     }
 
     private fun DonghuaItem.toSearchResponse(): SearchResponse {
-        val statusLabel = if (status.equals("End", true) || status.equals("Completed", true)) " (Completed)" else ""
+        val isCompleted = status.equals("End", true) || status.equals("Completed", true)
+        val statusLabel = if (isCompleted) " (Completed)" else ""
         val title = (this.title ?: "") + statusLabel
         val href = "$mainUrl/anime/${this.id}"
+
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = this@toSearchResponse.posterUrl
-            val days = releaseDay?.toString()?.split(",")?.mapNotNull { d ->
+
+            val days = releaseDay?.toString()?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { d ->
                 when (d.trim()) {
                     "1" -> "Senin"
                     "2" -> "Selasa"
@@ -145,17 +148,18 @@ class DonghuaArena : MainAPI() {
                     "7" -> "Minggu"
                     else -> null
                 }
-            }?.joinToString(", ") ?: releaseDay?.toString()
+            }?.joinToString(", ")
 
             val info = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
-                if (releaseTime != null) "$days | $releaseTime" else days
+                if (!releaseTime.isNullOrBlank()) "$days | $releaseTime" else days
             } else null
 
-            if (info != null) {
-                addDubStatus(info, eps)
-            } else {
-                addSub(eps)
+            val badge = buildString {
+                append("SUB")
+                if (eps != null && eps > 0) append(" | Eps $eps")
+                if (info != null) append(" | $info")
             }
+            addDubStatus(badge)
         }
     }
 }
