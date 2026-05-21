@@ -48,7 +48,7 @@ class DonghuaArena : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val items = app.get("$mainUrl/${request.data}").parsed<Array<DonghuaItem>>()
+        val items = app.get("$mainUrl/${request.data}?t=${System.currentTimeMillis()}").parsed<Array<DonghuaItem>>()
         val searchResponses = items.map { it.toSearchResponse() }
 
         return newHomePageResponse(
@@ -58,7 +58,7 @@ class DonghuaArena : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val items = app.get("$mainUrl/api/donghuas").parsed<Array<DonghuaItem>>()
+        val items = app.get("$mainUrl/api/donghuas?t=${System.currentTimeMillis()}").parsed<Array<DonghuaItem>>()
         return items.filter { it.title?.contains(query, ignoreCase = true) == true ||
                 it.description?.contains(query, ignoreCase = true) == true }
             .map { it.toSearchResponse() }
@@ -74,13 +74,12 @@ class DonghuaArena : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.removePrefix("$mainUrl/anime/")
-        val items = app.get("$mainUrl/api/donghuas").parsed<Array<DonghuaItem>>()
-        val item = items.find { it.id == id } ?: throw ErrorLoadingException("Anime not found")
+        val item = app.get("$mainUrl/api/donghuas/$id").parsed<DonghuaItem>()
 
         val genreMap = getGenres()
         val genres = item.genres?.mapNotNull { genreMap[it] }
 
-        val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id").parsed<Array<EpisodeItem>>()
+        val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>()
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
             .map { ep ->
@@ -118,7 +117,7 @@ class DonghuaArena : MainAPI() {
         }
 
         // Also fetch from servers API
-        val servers = app.get("$mainUrl/api/servers?episode_id=$data").parsed<Array<ServerItem>>()
+        val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
         servers.forEach { server ->
             server.url?.let {
                 loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
@@ -136,6 +135,7 @@ class DonghuaArena : MainAPI() {
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = this@toSearchResponse.posterUrl
+            addDubStatus(DubStatus.Subbed, eps)
 
             val days = releaseDay?.toString()?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { d ->
                 when (d.trim()) {
@@ -154,12 +154,9 @@ class DonghuaArena : MainAPI() {
                 if (!releaseTime.isNullOrBlank()) "$days | $releaseTime" else days
             } else null
 
-            val badge = buildString {
-                append("SUB")
-                if (eps != null && eps > 0) append(" | Eps $eps")
-                if (info != null) append(" | $info")
+            if (info != null) {
+                addDubStatus(info)
             }
-            addDubStatus(badge)
         }
     }
 }
