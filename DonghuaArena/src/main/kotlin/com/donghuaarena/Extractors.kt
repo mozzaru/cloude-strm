@@ -2,7 +2,8 @@ package com.donghuaarena
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import android.util.Log
+import com.lagradost.cloudstream3.utils.INFER_TYPE
+import com.lagradost.api.Log
 
 open class SimpleUniversalExtractor : ExtractorApi() {
     override val name: String get() = "SimpleUniversal"

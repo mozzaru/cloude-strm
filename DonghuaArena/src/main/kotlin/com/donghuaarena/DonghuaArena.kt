@@ -3,7 +3,7 @@ package com.donghuaarena
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.annotation.JsonProperty
-import android.util.Log
+import com.lagradost.api.Log
 
 data class DonghuaItem(
     @JsonProperty("id") val id: String? = null,
@@ -54,6 +54,7 @@ class DonghuaArena : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        Log.d(TAG, "getMainPage: ${request.data}")
         val items = app.get("$mainUrl/${request.data}?t=${System.currentTimeMillis()}").parsed<Array<DonghuaItem>>()
         val searchResponses = items.map { it.toSearchResponse() }
 
@@ -64,6 +65,7 @@ class DonghuaArena : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        Log.d(TAG, "search: $query")
         val items = app.get("$mainUrl/api/donghuas?t=${System.currentTimeMillis()}").parsed<Array<DonghuaItem>>()
         return items.filter { it.title?.contains(query, ignoreCase = true) == true ||
                 it.description?.contains(query, ignoreCase = true) == true }
@@ -77,12 +79,13 @@ class DonghuaArena : MainAPI() {
             genreMap = genres
             genres
         } catch (e: Exception) {
+            Log.e(TAG, "getGenres error: ${e.message}")
             emptyMap()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        Log.d(TAG, "Loading URL: $url")
+        Log.d(TAG, "load: $url")
         val id = url.removePrefix("$mainUrl/anime/")
         val item = app.get("$mainUrl/api/donghuas/$id").parsed<DonghuaItem>()
 
@@ -90,7 +93,7 @@ class DonghuaArena : MainAPI() {
         val genres = item.genres?.mapNotNull { genreMap[it] }
 
         val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>()
-        Log.d(TAG, "Fetched ${episodesRaw.size} episodes")
+        Log.d(TAG, "episodes fetched: ${episodesRaw.size}")
 
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
@@ -123,25 +126,25 @@ class DonghuaArena : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "loadLinks data: $data")
+        Log.d(TAG, "loadLinks: $data")
         val parts = data.split("|")
         val id = parts.getOrNull(0)
         val primaryUrl = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
 
         // 1. Load from primary video_url
         primaryUrl?.let {
-            Log.d(TAG, "Loading primary URL: $it")
+            Log.d(TAG, "loading primary mirror: $it")
             loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
         }
 
         // 2. Load from alternative mirrors
         id?.let { epId ->
             val servers = app.get("$mainUrl/api/servers?episode_id=$epId&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
-            Log.d(TAG, "Fetched ${servers.size} alternative servers")
+            Log.d(TAG, "alternative mirrors fetched: ${servers.size}")
             for (server in servers) {
                 server.url?.let {
                     if (it != primaryUrl) {
-                        Log.d(TAG, "Loading mirror URL: $it")
+                        Log.d(TAG, "loading alternative mirror: $it")
                         loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
                     }
                 }
