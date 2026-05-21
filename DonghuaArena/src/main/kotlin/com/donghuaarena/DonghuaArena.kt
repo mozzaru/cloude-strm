@@ -4,6 +4,30 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.fasterxml.jackson.annotation.JsonProperty
 
+data class DonghuaItem(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("description") val description: String? = null,
+    @JsonProperty("poster_url") val posterUrl: String? = null,
+    @JsonProperty("rating") val rating: Double? = null,
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("eps") val eps: Int? = null
+)
+
+data class EpisodeItem(
+    @JsonProperty("id") val id: String,
+    @JsonProperty("donghua_id") val donghuaId: String? = null,
+    @JsonProperty("episode_number") val episodeNumber: Int? = null,
+    @JsonProperty("video_url") val videoUrl: String? = null
+)
+
+data class ServerItem(
+    @JsonProperty("id") val id: Int? = null,
+    @JsonProperty("episode_id") val episodeId: String? = null,
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("url") val url: String? = null
+)
+
 class DonghuaArena : MainAPI() {
     override var mainUrl = "https://donghuaarena.site"
     override var name = "Donghua Arena"
@@ -16,7 +40,7 @@ class DonghuaArena : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val items = app.get("$mainUrl/${request.data}").parsed<List<DonghuaItem>>()
+        val items = app.get("$mainUrl/${request.data}").parsed<Array<DonghuaItem>>()
         val searchResponses = items.map { it.toSearchResponse() }
 
         return newHomePageResponse(
@@ -26,7 +50,7 @@ class DonghuaArena : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val items = app.get("$mainUrl/api/donghuas").parsed<List<DonghuaItem>>()
+        val items = app.get("$mainUrl/api/donghuas").parsed<Array<DonghuaItem>>()
         return items.filter { it.title?.contains(query, ignoreCase = true) == true ||
                 it.description?.contains(query, ignoreCase = true) == true }
             .map { it.toSearchResponse() }
@@ -34,10 +58,10 @@ class DonghuaArena : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.removePrefix("$mainUrl/anime/")
-        val items = app.get("$mainUrl/api/donghuas").parsed<List<DonghuaItem>>()
+        val items = app.get("$mainUrl/api/donghuas").parsed<Array<DonghuaItem>>()
         val item = items.find { it.id == id } ?: throw ErrorLoadingException("Anime not found")
 
-        val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id").parsed<List<EpisodeItem>>()
+        val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id").parsed<Array<EpisodeItem>>()
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
             .map { ep ->
@@ -51,6 +75,7 @@ class DonghuaArena : MainAPI() {
         return newTvSeriesLoadResponse(item.title ?: "", url, TvType.Anime, episodes) {
             this.posterUrl = item.posterUrl
             this.plot = item.description
+            this.score = Score.from10(item.rating)
         }
     }
 
@@ -66,7 +91,7 @@ class DonghuaArena : MainAPI() {
         }
 
         // Also fetch from servers API
-        val servers = app.get("$mainUrl/api/servers?episode_id=$data").parsed<List<ServerItem>>()
+        val servers = app.get("$mainUrl/api/servers?episode_id=$data").parsed<Array<ServerItem>>()
         servers.forEach { server ->
             server.url?.let {
                 loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
@@ -85,28 +110,4 @@ class DonghuaArena : MainAPI() {
             addSub(this@toSearchResponse.eps)
         }
     }
-
-    data class DonghuaItem(
-        @JsonProperty("id") val id: String? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("description") val description: String? = null,
-        @JsonProperty("poster_url") val posterUrl: String? = null,
-        @JsonProperty("rating") val rating: Double? = null,
-        @JsonProperty("status") val status: String? = null,
-        @JsonProperty("eps") val eps: Int? = null
-    )
-
-    data class EpisodeItem(
-        @JsonProperty("id") val id: String,
-        @JsonProperty("donghua_id") val donghuaId: String? = null,
-        @JsonProperty("episode_number") val episodeNumber: Int? = null,
-        @JsonProperty("video_url") val videoUrl: String? = null
-    )
-
-    data class ServerItem(
-        @JsonProperty("id") val id: Int? = null,
-        @JsonProperty("episode_id") val episodeId: String? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("url") val url: String? = null
-    )
 }
