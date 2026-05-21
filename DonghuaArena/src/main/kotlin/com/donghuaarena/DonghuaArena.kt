@@ -90,7 +90,8 @@ class DonghuaArena : MainAPI() {
         val episodes = episodesRaw
             .sortedBy { it.episodeNumber }
             .map { ep ->
-                newEpisode(ep.id) {
+                val epData = "${ep.id}|${ep.videoUrl ?: ""}"
+                newEpisode(epData) {
                     this.name = "Episode ${ep.episodeNumber}"
                     this.episode = ep.episodeNumber
                 }
@@ -117,17 +118,24 @@ class DonghuaArena : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Fetch the main video_url from episodes API
-        val episode = app.get("$mainUrl/api/episodes?id=$data&t=${System.currentTimeMillis()}").parsed<Array<EpisodeItem>>().firstOrNull()
-        episode?.videoUrl?.let {
-            loadExtractor(it, subtitleCallback, callback)
+        val parts = data.split("|")
+        val id = parts.getOrNull(0)
+        val primaryUrl = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+
+        // 1. Load from primary video_url
+        primaryUrl?.let {
+            loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
         }
 
-        // Also fetch from servers API
-        val servers = app.get("$mainUrl/api/servers?episode_id=$data&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
-        servers.forEach { server ->
-            server.url?.let {
-                loadExtractor(it, subtitleCallback, callback)
+        // 2. Load from alternative mirrors
+        id?.let { epId ->
+            val servers = app.get("$mainUrl/api/servers?episode_id=$epId&t=${System.currentTimeMillis()}").parsed<Array<ServerItem>>()
+            servers.forEach { server ->
+                server.url?.let {
+                    if (it != primaryUrl) {
+                        loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
+                    }
+                }
             }
         }
 
@@ -142,7 +150,6 @@ class DonghuaArena : MainAPI() {
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = this@toSearchResponse.posterUrl
-            addDubStatus(DubStatus.Subbed, eps)
 
             val days = releaseDay?.toString()?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { d ->
                 when (d.trim()) {
@@ -161,9 +168,12 @@ class DonghuaArena : MainAPI() {
                 if (!releaseTime.isNullOrBlank()) "$days | $releaseTime" else days
             } else null
 
-            if (info != null) {
-                addDubStatus(info)
+            val badge = buildString {
+                append("SUB")
+                if (eps != null && eps > 0) append(" | Eps $eps")
+                if (info != null) append(" | $info")
             }
+            addDubStatus(badge)
         }
     }
 }
