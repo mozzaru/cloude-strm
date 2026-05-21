@@ -11,7 +11,15 @@ data class DonghuaItem(
     @JsonProperty("poster_url") val posterUrl: String? = null,
     @JsonProperty("rating") val rating: Double? = null,
     @JsonProperty("status") val status: String? = null,
-    @JsonProperty("eps") val eps: Int? = null
+    @JsonProperty("eps") val eps: Int? = null,
+    @JsonProperty("genres") val genres: Array<Int>? = null,
+    @JsonProperty("release_day") val releaseDay: Any? = null,
+    @JsonProperty("release_time") val releaseTime: String? = null
+)
+
+data class GenreItem(
+    @JsonProperty("id") val id: Int,
+    @JsonProperty("name") val name: String
 )
 
 data class EpisodeItem(
@@ -56,10 +64,21 @@ class DonghuaArena : MainAPI() {
             .map { it.toSearchResponse() }
     }
 
+    private suspend fun getGenres(): Map<Int, String> {
+        return try {
+            app.get("$mainUrl/api/genres").parsed<Array<GenreItem>>().associate { it.id to it.name }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
     override suspend fun load(url: String): LoadResponse {
         val id = url.removePrefix("$mainUrl/anime/")
         val items = app.get("$mainUrl/api/donghuas").parsed<Array<DonghuaItem>>()
         val item = items.find { it.id == id } ?: throw ErrorLoadingException("Anime not found")
+
+        val genreMap = getGenres()
+        val genres = item.genres?.mapNotNull { genreMap[it] }
 
         val episodesRaw = app.get("$mainUrl/api/episodes?donghua_id=$id").parsed<Array<EpisodeItem>>()
         val episodes = episodesRaw
@@ -72,10 +91,18 @@ class DonghuaArena : MainAPI() {
                 }
             }
 
+        val status = when {
+            item.status.equals("End", true) || item.status.equals("Completed", true) -> ShowStatus.Completed
+            item.status.equals("Ongoing", true) -> ShowStatus.Ongoing
+            else -> null
+        }
+
         return newTvSeriesLoadResponse(item.title ?: "", url, TvType.Anime, episodes) {
             this.posterUrl = item.posterUrl
             this.plot = item.description
             this.score = Score.from10(item.rating)
+            this.showStatus = status
+            this.tags = genres
         }
     }
 
@@ -107,7 +134,28 @@ class DonghuaArena : MainAPI() {
         val href = "$mainUrl/anime/${this.id}"
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = this@toSearchResponse.posterUrl
-            addSub(this@toSearchResponse.eps)
+            val days = releaseDay?.toString()?.split(",")?.mapNotNull { d ->
+                when (d.trim()) {
+                    "1" -> "Senin"
+                    "2" -> "Selasa"
+                    "3" -> "Rabu"
+                    "4" -> "Kamis"
+                    "5" -> "Jumat"
+                    "6" -> "Sabtu"
+                    "7" -> "Minggu"
+                    else -> null
+                }
+            }?.joinToString(", ") ?: releaseDay?.toString()
+
+            val info = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
+                if (releaseTime != null) "$days | $releaseTime" else days
+            } else null
+
+            if (info != null) {
+                addDubStatus(info, eps)
+            } else {
+                addSub(eps)
+            }
         }
     }
 }
