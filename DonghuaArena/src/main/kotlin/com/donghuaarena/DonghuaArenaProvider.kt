@@ -9,34 +9,38 @@ class DonghuaArenaProvider: Plugin() {
     override fun load() {
         registerMainAPI(DonghuaArena())
 
-        // Site specific or custom
-        registerExtractorAPI(StreamHls())
-        registerExtractorAPI(LuluVdo())
-        registerExtractorAPI(LuluVid())
-        registerExtractorAPI(LuluStream())
-        registerExtractorAPI(MyVidPlay())
-        registerExtractorAPI(TurboVid())
-        registerExtractorAPI(Vidara())
-        registerExtractorAPI(VidaraSo())
-        registerExtractorAPI(Playmogo())
-
-        // Explicitly register common core extractors for better compatibility
-        registerExtractorAPI(DoodLaExtractor())
-        registerExtractorAPI(DoodToExtractor())
-        registerExtractorAPI(DoodSoExtractor())
-        registerExtractorAPI(DoodstreamCom())
-        registerExtractorAPI(StreamTape())
-        registerExtractorAPI(MixDrop())
-
-        // Byse variants from core
+        // Register core extractors first
         registerExtractorAPI(Bysezejataos())
         registerExtractorAPI(ByseBuho())
         registerExtractorAPI(ByseQekaho())
         registerExtractorAPI(ByseVepoin())
 
-        // VidHide from core
+        registerExtractorAPI(DoodLaExtractor())
+        registerExtractorAPI(DoodToExtractor())
+        registerExtractorAPI(DoodSoExtractor())
+        registerExtractorAPI(DoodstreamCom())
+
+        registerExtractorAPI(LuluStream())
+        registerExtractorAPI(Lulustream1())
+        registerExtractorAPI(Lulustream2())
+        registerExtractorAPI(Luluvdoo())
+
+        registerExtractorAPI(StreamTape())
+        registerExtractorAPI(MixDrop())
+        registerExtractorAPI(MixDropTo())
         registerExtractorAPI(VidhideExtractor())
         registerExtractorAPI(VidHidePro())
+
+        // Site specific or custom fallbacks
+        registerExtractorAPI(StreamHls())
+        registerExtractorAPI(LuluVid())
+        registerExtractorAPI(LuluVdo())
+        registerExtractorAPI(TurboVid())
+        registerExtractorAPI(Vidara())
+        registerExtractorAPI(VidaraSo())
+        registerExtractorAPI(Playmogo())
+        registerExtractorAPI(MyVidPlay())
+        registerExtractorAPI(ByseFallback())
 
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())

@@ -146,6 +146,7 @@ class DonghuaArena : MainAPI() {
             Log.d(TAG, "alternative mirrors fetched: ${servers.size}")
             for (server in servers) {
                 server.url?.let {
+                    Log.d(TAG, "Mirror found: ${server.name} -> $it")
                     if (!it.equals(primaryUrl, ignoreCase = true)) {
                         Log.d(TAG, "loading alternative mirror: $it")
                         loadExtractor(it, "$mainUrl/", subtitleCallback, callback)
@@ -174,11 +175,11 @@ class DonghuaArena : MainAPI() {
             }
         }?.joinToString(", ")
 
-        val schedule = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
-            if (!releaseTime.isNullOrBlank()) " [$days | $releaseTime]" else " [$days]"
+        val scheduleLabel = if (!days.isNullOrBlank() && status.equals("Ongoing", true)) {
+            " [$days | ${releaseTime ?: ""}]".trimEnd()
         } else ""
 
-        val title = (this.title ?: "") + statusLabel + schedule
+        val title = (this.title ?: "") + statusLabel + scheduleLabel
         val href = "$mainUrl/anime/${this.id}"
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
