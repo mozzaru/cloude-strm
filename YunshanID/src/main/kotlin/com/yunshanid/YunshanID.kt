@@ -111,9 +111,22 @@ class YunshanID : MainAPI() {
             return false
         }
 
+        val driveFileIdRegex = Regex("/file/d/([a-zA-Z0-9_-]{10,})")
+        val processedDriveIds = mutableSetOf<String>()
+
         allUrls.forEach { url ->
-            Log.d("YunshanID", "loadExtractor -> $url")
-            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+            if (url.contains("drive.google.com")) {
+                val fileId = driveFileIdRegex.find(url)?.groupValues?.get(1)
+                if (fileId == null || !processedDriveIds.add(fileId)) {
+                    Log.d("YunshanID", "Skip Drive (null/duplikat): $url")
+                    return@forEach
+                }
+                Log.d("YunshanID", "Drive -> GdriveExtractor langsung: $fileId")
+                GdriveExtractor().getUrl(url, "$mainUrl/", subtitleCallback, callback)
+            } else {
+                Log.d("YunshanID", "loadExtractor -> $url")
+                loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+            }
         }
 
         return true
