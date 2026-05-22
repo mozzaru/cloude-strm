@@ -192,7 +192,7 @@ class Byse : ExtractorApi() {
                 Log.d(TAG, "m3u8: ${source.url}")
                 callback.invoke(newExtractorLink(name, name, source.url, INFER_TYPE) {
                     this.referer = "$PLAYER_ORIGIN/"
-                    this.quality = source.height ?: Qualities.Unknown.value
+                    this.quality = Qualities.Unknown.value
                 })
             }
 
