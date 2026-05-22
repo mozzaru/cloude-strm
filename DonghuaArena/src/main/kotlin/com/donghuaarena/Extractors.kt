@@ -1,10 +1,14 @@
 package com.donghuaarena
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.extractors.DoodLaExtractor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.Base64
 
 open class SimpleUniversalExtractor(override val name: String, override val mainUrl: String) : ExtractorApi() {
     override val requiresReferer: Boolean get() = true
@@ -63,140 +67,6 @@ class Vidara : SimpleUniversalExtractor("Vidara", "https://vidara.xyz")
 class VidaraSo : SimpleUniversalExtractor("Vidara", "https://vidara.so")
 class Playmogo : SimpleUniversalExtractor("Playmogo", "https://playmogo.com")
 
-class Byse : ExtractorApi() {
-    override val name: String = "Byse"
-    override val mainUrl: String = "https://bysezejataos.com"
-    override val requiresReferer: Boolean = true
-
-    companion object {
-        private const val TAG = "Byse"
-        private const val PLAYER_HOST = "rupertisdivingintoocean.com"
-    }
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        Log.d(TAG, "getUrl: $url")
-
-        val videoId = url.trimEnd('/').substringAfterLast("/")
-        if (videoId.isBlank()) {
-            Log.e(TAG, "Gagal ekstrak videoId dari: $url")
-            return
-        }
-        Log.d(TAG, "videoId: $videoId")
-
-        val playerOrigin = "https://$PLAYER_HOST"
-        val iframeUrl = "$playerOrigin/69p/$videoId"
-
-        // Step 1: Fetch iframe untuk dapat cookies (byse_viewer_id, byse_device_id)
-        val iframeHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$mainUrl/",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language" to "id-ID,id;q=0.9",
-            "Sec-Fetch-Dest" to "iframe",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Site" to "cross-site",
-            "Origin" to mainUrl
-        )
-
-        val iframeResp = try {
-            app.get(iframeUrl, headers = iframeHeaders)
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal fetch iframe: ${e.message}")
-            return
-        }
-
-        // Ambil cookies dari response
-        val cookies = iframeResp.cookies
-        Log.d(TAG, "Cookies dari iframe: $cookies")
-
-        // Step 2: Hit API playback endpoint
-        // Mode "embed" dengan X-Embed-Origin header
-        val playbackUrl = "$playerOrigin/api/videos/${videoId}/embed/playback"
-
-        val playbackHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$iframeUrl",
-            "Accept" to "application/json, */*",
-            "Accept-Language" to "id-ID,id;q=0.9",
-            "Origin" to playerOrigin,
-            "X-Embed-Origin" to mainUrl,
-            "X-Embed-Referer" to "$mainUrl/",
-            "Sec-Fetch-Dest" to "empty",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "same-origin"
-        )
-
-        Log.d(TAG, "Fetching playback API: $playbackUrl")
-
-        val playbackResp = try {
-            app.get(
-                playbackUrl,
-                headers = playbackHeaders,
-                cookies = cookies
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal fetch playback API: ${e.message}")
-            return
-        }
-
-        Log.d(TAG, "Playback response code: ${playbackResp.code}")
-        val body = playbackResp.text
-        Log.d(TAG, "Playback response snippet: ${body.take(300)}")
-
-        // Step 3: Parse response
-        // Response terenkripsi: {playback: {key_parts:[...], iv:"...", payload:"..."}}
-        // Atau langsung: {sources:[{url, mime_type, quality}]}
-
-        // Coba parse sources langsung (unencrypted fallback)
-        val directUrlRegex = """"url"\s*:\s*"(https?://[^"]+)"""".toRegex()
-        val directMatch = directUrlRegex.findAll(body)
-            .map { it.groupValues[1].replace("\\/", "/") }
-            .firstOrNull { it.contains(".m3u8") || it.contains("hls") || it.contains("sprintcdn") }
-
-        if (directMatch != null) {
-            Log.d(TAG, "m3u8 dari playback API: $directMatch")
-            callback.invoke(newExtractorLink(name, name, directMatch, INFER_TYPE) {
-                this.referer = "$playerOrigin/"
-            })
-            return
-        }
-
-        // Response encrypted → log raw untuk debug
-        Log.d(TAG, "Full playback response: ${body.take(1000)}")
-        
-        // Fallback: coba endpoint watch/playback (mungkin tidak encrypted)
-        val watchPlaybackUrl = "$playerOrigin/api/videos/${videoId}/playback"
-        val watchResp = try {
-            app.get(watchPlaybackUrl, headers = playbackHeaders, cookies = cookies)
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal fetch watch playback: ${e.message}")
-            return
-        }
-        
-        val watchBody = watchResp.text
-        Log.d(TAG, "Watch playback snippet: ${watchBody.take(500)}")
-        
-        val watchMatch = directUrlRegex.findAll(watchBody)
-            .map { it.groupValues[1].replace("\\/", "/") }
-            .firstOrNull { it.contains(".m3u8") || it.contains("hls") }
-
-        if (watchMatch != null) {
-            Log.d(TAG, "m3u8 dari watch playback: $watchMatch")
-            callback.invoke(newExtractorLink(name, name, watchMatch, INFER_TYPE) {
-                this.referer = "$playerOrigin/"
-            })
-            return
-        }
-
-        Log.e(TAG, "Semua metode gagal. Response: ${watchBody.take(200)}")
-    }
-}
-
 class MyVidPlay : DoodLaExtractor() {
     override var name: String = "DoodStream"
     override var mainUrl: String = "https://myvidplay.com"
@@ -238,4 +108,147 @@ class DTube : ExtractorApi() {
             })
         }
     }
+}
+
+class Byse : ExtractorApi() {
+    override val name: String = "Byse"
+    override val mainUrl: String = "https://bysezejataos.com"
+    override val requiresReferer: Boolean = true
+
+    companion object {
+        private const val TAG = "Byse"
+        private const val PLAYER_ORIGIN = "https://rupertisdivingintoocean.com"
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val videoId = url.trimEnd('/').substringAfterLast("/")
+        if (videoId.isBlank()) return
+        Log.d(TAG, "videoId: $videoId")
+
+        try {
+            // Step 1: Challenge
+            val ch = app.post(
+                "$PLAYER_ORIGIN/api/videos/access/challenge",
+                headers = mapOf("User-Agent" to USER_AGENT),
+                requestBody = "{}".toRequestBody("application/json".toMediaType())
+            ).parsed<ChallengeResponse>()
+            Log.d(TAG, "Challenge OK: ${ch.challengeId}")
+
+            // Step 2: Generate ECDSA P-256 keypair & sign
+            val kpg = java.security.KeyPairGenerator.getInstance("EC")
+            kpg.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+            val kp = kpg.generateKeyPair()
+            val ecPub = kp.public as java.security.interfaces.ECPublicKey
+
+            fun ByteArray.pad32(): ByteArray =
+                if (size >= 32) takeLast(32).toByteArray()
+                else ByteArray(32 - size) + this
+
+            val x = ecPub.w.affineX.toByteArray().pad32().toBase64Url()
+            val y = ecPub.w.affineY.toByteArray().pad32().toBase64Url()
+
+            val signer = java.security.Signature.getInstance("SHA256withECDSA")
+            signer.initSign(kp.private)
+            signer.update(ch.nonce.toByteArray())
+            val sigRaw = derToRaw(signer.sign())
+
+            // Step 3: Attest
+            val attestJson = """{"challenge_id":"${ch.challengeId}","nonce":"${ch.nonce}","signature":"${sigRaw.toBase64Url()}","public_key":{"kty":"EC","crv":"P-256","x":"$x","y":"$y"},"client":{"user_agent":"$USER_AGENT"},"storage":{},"attributes":{}}"""
+            val attest = app.post(
+                "$PLAYER_ORIGIN/api/videos/access/attest",
+                headers = mapOf("User-Agent" to USER_AGENT),
+                requestBody = attestJson.toRequestBody("application/json".toMediaType())
+            ).parsed<AttestResponse>()
+            Log.d(TAG, "Attest OK confidence=${attest.confidence}")
+
+            // Step 4: Playback
+            val playbackJson = """{"fingerprint":{"token":"${attest.token}","viewer_id":"${attest.viewerId}","device_id":"${attest.deviceId}","confidence":${attest.confidence}}}"""
+            val pbResp = app.post(
+                "$PLAYER_ORIGIN/api/videos/$videoId/playback",
+                headers = mapOf("User-Agent" to USER_AGENT),
+                requestBody = playbackJson.toRequestBody("application/json".toMediaType())
+            ).parsed<PlaybackResponse>()
+
+            // Step 5: Decrypt AES-256-GCM
+            val enc = pbResp.playback ?: run { Log.e(TAG, "No playback"); return }
+            val key = enc.keyParts.fold(byteArrayOf()) { acc, kp2 -> acc + kp2.fromBase64Url() }
+            val iv = enc.iv.fromBase64Url()
+            val payload = enc.payload.fromBase64Url()
+
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                javax.crypto.Cipher.DECRYPT_MODE,
+                javax.crypto.spec.SecretKeySpec(key, "AES"),
+                javax.crypto.spec.GCMParameterSpec(128, iv)
+            )
+            val decrypted = AppUtils.parseJson<DecryptedPlayback>(String(cipher.doFinal(payload)))
+
+            decrypted.sources.forEach { source ->
+                Log.d(TAG, "m3u8: ${source.url}")
+                callback.invoke(newExtractorLink(name, name, source.url, INFER_TYPE) {
+                    this.referer = "$PLAYER_ORIGIN/"
+                    this.quality = source.height ?: Qualities.Unknown.value
+                })
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Byse error: ${e.message}")
+        }
+    }
+
+    private fun derToRaw(der: ByteArray): ByteArray {
+        var i = 2
+        val rLen = der[i + 1].toInt() and 0xFF
+        val r = der.slice(i + 2 until i + 2 + rLen).toByteArray()
+        i += 2 + rLen
+        val sLen = der[i + 1].toInt() and 0xFF
+        val s = der.slice(i + 2 until i + 2 + sLen).toByteArray()
+        fun ByteArray.pad32() =
+            if (size > 32) takeLast(32).toByteArray()
+            else ByteArray(32 - size) + this
+        return r.pad32() + s.pad32()
+    }
+
+    private fun ByteArray.toBase64Url(): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(this)
+
+    private fun String.fromBase64Url(): ByteArray =
+        Base64.getUrlDecoder().decode(this)
+
+    data class ChallengeResponse(
+        @JsonProperty("challenge_id") val challengeId: String = "",
+        @JsonProperty("nonce") val nonce: String = ""
+    )
+
+    data class AttestResponse(
+        @JsonProperty("token") val token: String = "",
+        @JsonProperty("viewer_id") val viewerId: String = "",
+        @JsonProperty("device_id") val deviceId: String = "",
+        @JsonProperty("confidence") val confidence: Double = 0.0
+    )
+
+    data class PlaybackResponse(
+        @JsonProperty("playback") val playback: EncryptedPayload? = null
+    )
+
+    data class EncryptedPayload(
+        @JsonProperty("key_parts") val keyParts: List<String> = emptyList(),
+        @JsonProperty("iv") val iv: String = "",
+        @JsonProperty("payload") val payload: String = ""
+    )
+
+    data class DecryptedPlayback(
+        @JsonProperty("sources") val sources: List<VideoSource> = emptyList()
+    )
+
+    data class VideoSource(
+        @JsonProperty("url") val url: String = "",
+        @JsonProperty("height") val height: Int? = null,
+        @JsonProperty("label") val label: String? = null
+    )
 }
