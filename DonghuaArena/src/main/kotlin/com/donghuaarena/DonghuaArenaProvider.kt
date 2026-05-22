@@ -40,7 +40,7 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(VidaraSo())
         registerExtractorAPI(Playmogo())
         registerExtractorAPI(MyVidPlay())
-        registerExtractorAPI(ByseFallback())
+        registerExtractorAPI(Byse())
 
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())
