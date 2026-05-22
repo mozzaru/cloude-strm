@@ -13,62 +13,36 @@ open class SimpleUniversalExtractor(override val name: String, override val main
         Log.d("Universal", "getUrl: $url referer: $referer")
         val response = app.get(url, referer = referer, headers = mapOf("User-Agent" to USER_AGENT)).text
 
-        // Try to find m3u8 in scripts
         val m3u8Regex = """["'](https?://[^"']+\.m3u8[^"']*)["']""".toRegex()
         val m3u8Match = m3u8Regex.find(response)
 
         if (m3u8Match != null) {
             val link = m3u8Match.groupValues[1].replace("\\/", "/")
             Log.d("Universal", "Found m3u8: $link")
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    link,
-                    INFER_TYPE
-                ) {
-                    this.referer = referer ?: url
-                }
-            )
+            callback.invoke(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
+                this.referer = referer ?: url
+            })
         } else {
-            // Try packed
             val unpacked = getAndUnpack(response)
             if (unpacked != response) {
                 val packedMatch = m3u8Regex.find(unpacked)
                 if (packedMatch != null) {
                     val link = packedMatch.groupValues[1].replace("\\/", "/")
                     Log.d("Universal", "Found m3u8 in packed: $link")
-                    callback.invoke(
-                        newExtractorLink(
-                            this.name,
-                            this.name,
-                            link,
-                            INFER_TYPE
-                        ) {
-                            this.referer = referer ?: url
-                        }
-                    )
+                    callback.invoke(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
+                        this.referer = referer ?: url
+                    })
                     return
                 }
             }
 
-            // Try generic video tag
             val videoRegex = """<video[^>]+src=["'](https?://[^"']+)["']""".toRegex()
             videoRegex.find(response)?.groupValues?.get(1)?.let { link ->
                 Log.d("Universal", "Found video src: $link")
-                callback.invoke(
-                    newExtractorLink(
-                        this.name,
-                        this.name,
-                        link,
-                        INFER_TYPE
-                    ) {
-                        this.referer = referer ?: url
-                        if (!link.contains(".m3u8")) {
-                            this.quality = Qualities.Unknown.value
-                        }
-                    }
-                )
+                callback.invoke(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
+                    this.referer = referer ?: url
+                    if (!link.contains(".m3u8")) this.quality = Qualities.Unknown.value
+                })
             }
         }
     }
@@ -82,21 +56,15 @@ class Vidara : SimpleUniversalExtractor("Vidara", "https://vidara.xyz")
 class VidaraSo : SimpleUniversalExtractor("Vidara", "https://vidara.so")
 class Playmogo : SimpleUniversalExtractor("Playmogo", "https://playmogo.com")
 
-// ─── Byse Extractor (Fixed) ──────────────────────────────────────────────────
-// Problem: bysezejataos.com is a React SPA protected by Cloudflare Turnstile.
-// The initial HTML never contains video URLs — the player loads them via a
-// JSON API call after the challenge is solved.
-// Fix: hit the known Byse JSON source endpoint directly using the embed ID,
-// which is accessible without JS execution.
 class Byse : ExtractorApi() {
     override val name: String = "Byse"
     override val mainUrl: String = "https://bysezejataos.com"
     override val requiresReferer: Boolean = true
 
-    // Byse embed URLs follow the pattern: /e/{videoId}
-    // Their backend exposes video sources at: /api/source/{videoId}
-    // (common pattern for Plyr/HLS-based hosts like this one)
-    private val sourceApiPath = "/api/source"
+    companion object {
+        private const val TAG = "Byse"
+        private const val IFRAME_HOST = "rupertisdivingintoocean.com"
+    }
 
     override suspend fun getUrl(
         url: String,
@@ -104,128 +72,91 @@ class Byse : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d("Byse", "getUrl: $url referer: $referer")
+        Log.d(TAG, "getUrl: $url")
 
-        // Extract video ID from URL (e.g. https://bysezejataos.com/e/19ubis624q4z → 19ubis624q4z)
         val videoId = url.trimEnd('/').substringAfterLast("/")
-        if (videoId.isBlank()) {
-            Log.e("Byse", "Could not extract video ID from: $url")
+        Log.d(TAG, "videoId: $videoId")
+
+        val byseHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to (referer ?: "$mainUrl/"),
+            "Accept" to "text/html,application/xhtml+xml,*/*"
+        )
+
+        val byseHtml = try {
+            app.get(url, headers = byseHeaders).text
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal fetch Byse page: ${e.message}")
             return
         }
 
-        val headers = mapOf(
+        val iframeRegex = """<iframe[^>]+src=["'](https?://[^"']+)["']""".toRegex()
+        val iframeUrl = iframeRegex.findAll(byseHtml)
+            .map { it.groupValues[1] }
+            .firstOrNull { it.contains(IFRAME_HOST) }
+
+        if (iframeUrl == null) {
+            Log.e(TAG, "Iframe $IFRAME_HOST tidak ditemukan di halaman Byse")
+            Log.d(TAG, "HTML snippet: ${byseHtml.take(500).replace("\n", " ")}")
+            return
+        }
+        Log.d(TAG, "Iframe URL ditemukan: $iframeUrl")
+
+        val iframeOrigin = "https://$IFRAME_HOST"
+        val iframeHeaders = mapOf(
             "User-Agent" to USER_AGENT,
-            "Referer" to (referer ?: "$mainUrl/"),
-            "X-Requested-With" to "XMLHttpRequest",
-            "Accept" to "application/json, text/javascript, */*; q=0.01"
+            "Referer" to "$mainUrl/",
+            "Accept" to "text/html,application/xhtml+xml,*/*",
+            "Origin" to mainUrl
         )
 
-        // ── Attempt 1: /api/source/{id} (POST, common for this host family) ──
-        try {
-            val apiUrl = "$mainUrl$sourceApiPath/$videoId"
-            Log.d("Byse", "Trying API POST: $apiUrl")
-            val res = app.post(
-                apiUrl,
-                headers = headers,
-                data = mapOf("r" to (referer ?: ""), "d" to mainUrl.removePrefix("https://"))
-            ).text
-            Log.d("Byse", "API response: $res")
-            val m3u8 = parseSourceResponse(res, url, referer, callback)
-            if (m3u8) return
+        val iframeHtml = try {
+            app.get(iframeUrl, headers = iframeHeaders).text
         } catch (e: Exception) {
-            Log.e("Byse", "API POST failed: ${e.message}")
+            Log.e(TAG, "Gagal fetch iframe: ${e.message}")
+            return
         }
 
-        // ── Attempt 2: /api/source/{id} (GET) ──
-        try {
-            val apiUrl = "$mainUrl$sourceApiPath/$videoId"
-            Log.d("Byse", "Trying API GET: $apiUrl")
-            val res = app.get(apiUrl, headers = headers).text
-            Log.d("Byse", "API GET response: $res")
-            val m3u8 = parseSourceResponse(res, url, referer, callback)
-            if (m3u8) return
-        } catch (e: Exception) {
-            Log.e("Byse", "API GET failed: ${e.message}")
+        Log.d(TAG, "Iframe HTML snippet: ${iframeHtml.take(600).replace("\n", " ")}")
+
+        val m3u8Regex = """["'`](https?://[^"'`\s]+\.m3u8[^"'`\s]*)["'`]""".toRegex()
+
+        val directMatch = m3u8Regex.find(iframeHtml)
+        if (directMatch != null) {
+            val link = directMatch.groupValues[1].replace("\\/", "/")
+            Log.d(TAG, "m3u8 dari iframe HTML: $link")
+            callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
+                this.referer = iframeOrigin + "/"
+            })
+            return
         }
 
-        // ── Attempt 3: Regex scrape on the raw embed page ──
-        // In case Cloudflare is bypassed by the request headers, scan HTML/JS
-        try {
-            Log.d("Byse", "Falling back to page scrape")
-            val pageText = app.get(url, headers = headers).text
-            val m3u8Regex = """["'`](https?://[^"'`\s]+\.m3u8[^"'`\s]*)["'`]""".toRegex()
-            val match = m3u8Regex.find(pageText)
-            if (match != null) {
-                val link = match.groupValues[1].replace("\\/", "/")
-                Log.d("Byse", "Scraped m3u8 from page: $link")
+        val unpacked = getAndUnpack(iframeHtml)
+        if (unpacked != iframeHtml) {
+            Log.d(TAG, "Unpacked snippet: ${unpacked.take(400).replace("\n", " ")}")
+            m3u8Regex.find(unpacked)?.let {
+                val link = it.groupValues[1].replace("\\/", "/")
+                Log.d(TAG, "m3u8 dari packed JS: $link")
                 callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                    this.referer = referer ?: url
+                    this.referer = iframeOrigin + "/"
                 })
                 return
             }
-
-            // Also try unpacking obfuscated JS
-            val unpacked = getAndUnpack(pageText)
-            if (unpacked != pageText) {
-                val packedMatch = m3u8Regex.find(unpacked)
-                if (packedMatch != null) {
-                    val link = packedMatch.groupValues[1].replace("\\/", "/")
-                    Log.d("Byse", "Scraped m3u8 from packed JS: $link")
-                    callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                        this.referer = referer ?: url
-                    })
-                    return
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("Byse", "Page scrape failed: ${e.message}")
         }
 
-        Log.e("Byse", "All attempts failed for: $url")
-    }
-
-    /**
-     * Parses a JSON response that may look like:
-     *   {"success":true,"data":[{"file":"https://...m3u8","label":"HD","type":"hls"}]}
-     * or just a plain URL string.
-     * Returns true if at least one link was found.
-     */
-    private suspend fun parseSourceResponse(
-        response: String,
-        originalUrl: String,
-        referer: String?,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        var found = false
-
-        // Pattern: "file":"https://...m3u8"
-        val fileRegex = """"file"\s*:\s*["'](https?://[^"']+)["']""".toRegex()
-        fileRegex.findAll(response).forEach { match ->
-            val link = match.groupValues[1].replace("\\/", "/")
-            Log.d("Byse", "Found file in JSON: $link")
+        val jsonFieldRegex = """"(?:file|src|url|hls|source|stream)"\s*:\s*["'](https?://[^"']+)["']""".toRegex()
+        jsonFieldRegex.find(iframeHtml)?.let {
+            val link = it.groupValues[1].replace("\\/", "/")
+            Log.d(TAG, "Link dari JSON field: $link")
             callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                this.referer = referer ?: originalUrl
+                this.referer = iframeOrigin + "/"
             })
-            found = true
+            return
         }
 
-        // Fallback: bare m3u8 URL anywhere in response
-        if (!found) {
-            val m3u8Regex = """https?://[^\s"']+\.m3u8[^\s"']*""".toRegex()
-            m3u8Regex.find(response)?.let { match ->
-                val link = match.value.replace("\\/", "/")
-                Log.d("Byse", "Found bare m3u8 in response: $link")
-                callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                    this.referer = referer ?: originalUrl
-                })
-                found = true
-            }
-        }
-
-        return found
+        Log.e(TAG, "m3u8 tidak ditemukan di iframe player")
     }
 }
-// ─────────────────────────────────────────────────────────────────────────────
 
 class MyVidPlay : DoodLaExtractor() {
     override var name: String = "DoodStream"
@@ -238,16 +169,9 @@ class ArchiveOrg : ExtractorApi() {
     override val requiresReferer: Boolean get() = false
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        callback.invoke(
-            newExtractorLink(
-                this.name,
-                this.name,
-                url,
-                INFER_TYPE
-            ) {
-                this.quality = Qualities.Unknown.value
-            }
-        )
+        callback.invoke(newExtractorLink(this.name, this.name, url, INFER_TYPE) {
+            this.quality = Qualities.Unknown.value
+        })
     }
 }
 
@@ -260,16 +184,9 @@ class DTube : ExtractorApi() {
         val videoId = url.split("?v=").lastOrNull()?.split("&")?.firstOrNull()
         if (videoId != null) {
             val m3u8 = "https://nas1.d.tube/videos/$videoId/master.m3u8"
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    m3u8,
-                    INFER_TYPE
-                ) {
-                    this.quality = Qualities.Unknown.value
-                }
-            )
+            callback.invoke(newExtractorLink(this.name, this.name, m3u8, INFER_TYPE) {
+                this.quality = Qualities.Unknown.value
+            })
         }
     }
 }
