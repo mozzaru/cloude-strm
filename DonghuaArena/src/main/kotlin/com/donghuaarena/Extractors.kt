@@ -70,7 +70,7 @@ class Byse : ExtractorApi() {
 
     companion object {
         private const val TAG = "Byse"
-        private const val IFRAME_HOST = "rupertisdivingintoocean.com"
+        private const val PLAYER_HOST = "rupertisdivingintoocean.com"
     }
 
     override suspend fun getUrl(
@@ -88,67 +88,112 @@ class Byse : ExtractorApi() {
         }
         Log.d(TAG, "videoId: $videoId")
 
-        val iframeUrl = "https://$IFRAME_HOST/69p/$videoId"
-        val iframeOrigin = "https://$IFRAME_HOST"
-        Log.d(TAG, "Fetch iframe: $iframeUrl")
+        val playerOrigin = "https://$PLAYER_HOST"
+        val iframeUrl = "$playerOrigin/69p/$videoId"
 
+        // Step 1: Fetch iframe untuk dapat cookies (byse_viewer_id, byse_device_id)
         val iframeHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to "$mainUrl/",
-            "Accept" to "text/html,application/xhtml+xml,*/*",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "id-ID,id;q=0.9",
+            "Sec-Fetch-Dest" to "iframe",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "cross-site",
             "Origin" to mainUrl
         )
 
-        val iframeHtml = try {
-            app.get(iframeUrl, headers = iframeHeaders).text
+        val iframeResp = try {
+            app.get(iframeUrl, headers = iframeHeaders)
         } catch (e: Exception) {
             Log.e(TAG, "Gagal fetch iframe: ${e.message}")
             return
         }
 
-        Log.d(TAG, "Iframe snippet: ${iframeHtml.take(500).replace("\n", " ")}")
+        // Ambil cookies dari response
+        val cookies = iframeResp.cookies
+        Log.d(TAG, "Cookies dari iframe: $cookies")
 
-        val m3u8Regex = """["'`](https?://[^"'`\s]+\.m3u8[^"'`\s]*)["'`]""".toRegex()
+        // Step 2: Hit API playback endpoint
+        // Mode "embed" dengan X-Embed-Origin header
+        val playbackUrl = "$playerOrigin/api/videos/${videoId}/embed/playback"
 
-        // 1. Cari m3u8 langsung di HTML
-        val directMatch = m3u8Regex.find(iframeHtml)
+        val playbackHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$iframeUrl",
+            "Accept" to "application/json, */*",
+            "Accept-Language" to "id-ID,id;q=0.9",
+            "Origin" to playerOrigin,
+            "X-Embed-Origin" to mainUrl,
+            "X-Embed-Referer" to "$mainUrl/",
+            "Sec-Fetch-Dest" to "empty",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Site" to "same-origin"
+        )
+
+        Log.d(TAG, "Fetching playback API: $playbackUrl")
+
+        val playbackResp = try {
+            app.get(
+                playbackUrl,
+                headers = playbackHeaders,
+                cookies = cookies
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal fetch playback API: ${e.message}")
+            return
+        }
+
+        Log.d(TAG, "Playback response code: ${playbackResp.code}")
+        val body = playbackResp.text
+        Log.d(TAG, "Playback response snippet: ${body.take(300)}")
+
+        // Step 3: Parse response
+        // Response terenkripsi: {playback: {key_parts:[...], iv:"...", payload:"..."}}
+        // Atau langsung: {sources:[{url, mime_type, quality}]}
+
+        // Coba parse sources langsung (unencrypted fallback)
+        val directUrlRegex = """"url"\s*:\s*"(https?://[^"]+)"""".toRegex()
+        val directMatch = directUrlRegex.findAll(body)
+            .map { it.groupValues[1].replace("\\/", "/") }
+            .firstOrNull { it.contains(".m3u8") || it.contains("hls") || it.contains("sprintcdn") }
+
         if (directMatch != null) {
-            val link = directMatch.groupValues[1].replace("\\/", "/")
-            Log.d(TAG, "m3u8 dari iframe HTML: $link")
-            callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                this.referer = "$iframeOrigin/"
+            Log.d(TAG, "m3u8 dari playback API: $directMatch")
+            callback.invoke(newExtractorLink(name, name, directMatch, INFER_TYPE) {
+                this.referer = "$playerOrigin/"
             })
             return
         }
 
-        // 2. Coba unpack obfuscated JS
-        val unpacked = getAndUnpack(iframeHtml)
-        if (unpacked != iframeHtml) {
-            Log.d(TAG, "Unpacked snippet: ${unpacked.take(400).replace("\n", " ")}")
-            val packedMatch = m3u8Regex.find(unpacked)
-            if (packedMatch != null) {
-                val link = packedMatch.groupValues[1].replace("\\/", "/")
-                Log.d(TAG, "m3u8 dari packed JS: $link")
-                callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                    this.referer = "$iframeOrigin/"
-                })
-                return
-            }
+        // Response encrypted → log raw untuk debug
+        Log.d(TAG, "Full playback response: ${body.take(1000)}")
+        
+        // Fallback: coba endpoint watch/playback (mungkin tidak encrypted)
+        val watchPlaybackUrl = "$playerOrigin/api/videos/${videoId}/playback"
+        val watchResp = try {
+            app.get(watchPlaybackUrl, headers = playbackHeaders, cookies = cookies)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal fetch watch playback: ${e.message}")
+            return
         }
+        
+        val watchBody = watchResp.text
+        Log.d(TAG, "Watch playback snippet: ${watchBody.take(500)}")
+        
+        val watchMatch = directUrlRegex.findAll(watchBody)
+            .map { it.groupValues[1].replace("\\/", "/") }
+            .firstOrNull { it.contains(".m3u8") || it.contains("hls") }
 
-        // 3. Fallback: JSON field "file","src","url","hls","source","stream"
-        val jsonFieldRegex = """"(?:file|src|url|hls|source|stream)"\s*:\s*["'](https?://[^"']+)["']""".toRegex()
-        val jsonMatch = jsonFieldRegex.find(iframeHtml)
-        if (jsonMatch != null) {
-            val link = jsonMatch.groupValues[1].replace("\\/", "/")
-            Log.d(TAG, "Link dari JSON field: $link")
-            callback.invoke(newExtractorLink(name, name, link, INFER_TYPE) {
-                this.referer = "$iframeOrigin/"
+        if (watchMatch != null) {
+            Log.d(TAG, "m3u8 dari watch playback: $watchMatch")
+            callback.invoke(newExtractorLink(name, name, watchMatch, INFER_TYPE) {
+                this.referer = "$playerOrigin/"
             })
             return
         }
 
-        Log.e(TAG, "m3u8 tidak ditemukan di iframe player")
+        Log.e(TAG, "Semua metode gagal. Response: ${watchBody.take(200)}")
     }
 }
 
