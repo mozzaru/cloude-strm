@@ -8,7 +8,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import java.net.URLDecoder
 
 class GdriveExtractor : ExtractorApi() {
-    override var name = "Google Drive"
+    override var name = "Gdrive"
     override var mainUrl = "https://drive.google.com"
     override val requiresReferer = false
 
@@ -100,23 +100,19 @@ class GdriveExtractor : ExtractorApi() {
                 val itag = fmt.itag ?: continue
                 val streamUrl = fmt.url ?: continue
 
-                // Skip duplikat itag
                 if (!seen.add(itag)) {
                     Log.d("GdriveExtractor", "Skip duplikat itag=$itag")
                     continue
                 }
 
-                val qualityName = itagToName(itag)
                 val quality = itagToQuality(itag)
 
-                Log.d("GdriveExtractor", "Menambahkan stream: itag=$itag ($qualityName)")
+                Log.d("GdriveExtractor", "Menambahkan stream: itag=$itag (${itagToName(itag)})")
 
                 callback.invoke(
                     newExtractorLink(
-                        // source = name agar tampil "Google Drive"
-                        // name hanya qualityName agar tidak double
                         source = name,
-                        name   = qualityName,
+                        name   = name,
                         url    = streamUrl,
                         type   = ExtractorLinkType.VIDEO
                     ) {
