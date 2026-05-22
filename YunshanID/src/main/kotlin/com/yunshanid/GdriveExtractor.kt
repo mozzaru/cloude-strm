@@ -25,6 +25,8 @@ class GdriveExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("GdriveExtractor", "=== getUrl dipanggil: $url ===")
+
         Log.d("GdriveExtractor", "=== getUrl: $url ===")
 
         val fileId = fileIdRegex.firstNotNullOfOrNull { it.find(url)?.groupValues?.get(1) }

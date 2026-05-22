@@ -88,43 +88,27 @@ class YunshanID : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d("YunshanID", "=== loadLinks dipanggil ===")
-        Log.d("YunshanID", "data: ${data.take(200)}")
 
         val ep = parseJson<Episode>(data)
         Log.d("YunshanID", "Episode ID=${ep.id}, epNumber=${ep.epNumber}")
 
-        val allUrls = mutableSetOf<String>()
-
-        ep.videoUrl?.let {
-            Log.d("YunshanID", "videoUrl: $it")
-            allUrls.add(it)
+        Log.d("YunshanID", "videoUrl: ${ep.videoUrl}")
+        ep.servers?.forEachIndexed { i, server ->
+            Log.d("YunshanID", "server[$i]: name=${server.name} | url=${server.url} | embed=${server.embedUrl}")
         }
+
+        val allUrls = mutableSetOf<String>()
+        ep.videoUrl?.let { allUrls.add(it) }
         ep.servers?.forEach { server ->
-            Log.d("YunshanID", "server: name=${server.name}, url=${server.url}, embed=${server.embedUrl}")
             server.url?.let { allUrls.add(it) }
             server.embedUrl?.let { allUrls.add(it) }
         }
-        ep.downloads?.forEach { dl ->
-            Log.d("YunshanID", "download: res=${dl.resolution}, url=${dl.url}")
-            dl.url?.let { allUrls.add(it) }
-        }
 
-        Log.d("YunshanID", "Total URL dikumpulkan: ${allUrls.size}")
-
-        if (allUrls.isEmpty()) {
-            Log.e("YunshanID", "Tidak ada URL sama sekali! Cek API response")
-            return false
-        }
+        Log.d("YunshanID", "Total URL unik: ${allUrls.size}")
 
         allUrls.forEach { url ->
             Log.d("YunshanID", "loadExtractor -> $url")
-            if (url.contains("drive.google.com")) {
-                // Panggil GdriveExtractor langsung — bypass loadExtractor
-                Log.d("YunshanID", "Drive URL terdeteksi, panggil GdriveExtractor langsung")
-                GdriveExtractor().getUrl(url, "$mainUrl/", subtitleCallback, callback)
-            } else {
-                loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
-            }
+            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
         }
 
         return true
