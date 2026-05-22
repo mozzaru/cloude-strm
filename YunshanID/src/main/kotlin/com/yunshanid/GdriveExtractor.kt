@@ -60,7 +60,6 @@ class GdriveExtractor : ExtractorApi() {
             val response = app.get(apiUrl, headers = headers).text
             Log.d("GdriveExtractor", "Response length: ${response.length}")
 
-            // Parse application/x-www-form-urlencoded
             val params = response.split("&").mapNotNull { part ->
                 val idx = part.indexOf('=')
                 if (idx == -1) null
@@ -91,23 +90,35 @@ class GdriveExtractor : ExtractorApi() {
                 return false
             }
 
-            // Urutkan kualitas tertinggi dulu
-            val sorted = formats.sortedByDescending { itagToQualityValue(it.itag ?: 0) }
+            // Deduplikasi berdasarkan itag
+            val seen = mutableSetOf<Int>()
+            val sorted = formats
+                .filter { it.itag != null && it.url != null }
+                .sortedByDescending { itagToQualityValue(it.itag ?: 0) }
 
             for (fmt in sorted) {
-                val streamUrl = fmt.url ?: continue
                 val itag = fmt.itag ?: continue
-                val qualityName = fmt.qualityLabel ?: itagToName(itag)
+                val streamUrl = fmt.url ?: continue
+
+                // Skip duplikat itag
+                if (!seen.add(itag)) {
+                    Log.d("GdriveExtractor", "Skip duplikat itag=$itag")
+                    continue
+                }
+
+                val qualityName = itagToName(itag)
                 val quality = itagToQuality(itag)
 
                 Log.d("GdriveExtractor", "Menambahkan stream: itag=$itag ($qualityName)")
 
                 callback.invoke(
                     newExtractorLink(
+                        // source = name agar tampil "Google Drive"
+                        // name hanya qualityName agar tidak double
                         source = name,
-                        name = "$name $qualityName",
-                        url = streamUrl,
-                        type = ExtractorLinkType.VIDEO
+                        name   = qualityName,
+                        url    = streamUrl,
+                        type   = ExtractorLinkType.VIDEO
                     ) {
                         this.quality = quality
                         this.referer = "https://drive.google.com/"
@@ -128,7 +139,6 @@ class GdriveExtractor : ExtractorApi() {
         }
     }
 
-    // itag 37=1080p, 22=720p, 18=360p (semua muxed video+audio)
     private fun itagToQualityValue(itag: Int) = when (itag) {
         37 -> 3
         22 -> 2
@@ -155,15 +165,15 @@ class GdriveExtractor : ExtractorApi() {
     )
 
     data class StreamingData(
-        @JsonProperty("formats") val formats: List<Format>?,
+        @JsonProperty("formats")         val formats: List<Format>?,
         @JsonProperty("adaptiveFormats") val adaptiveFormats: List<Format>?
     )
 
     data class Format(
-        @JsonProperty("itag") val itag: Int?,
-        @JsonProperty("url") val url: String?,
-        @JsonProperty("mimeType") val mimeType: String?,
-        @JsonProperty("quality") val quality: String?,
+        @JsonProperty("itag")         val itag: Int?,
+        @JsonProperty("url")          val url: String?,
+        @JsonProperty("mimeType")     val mimeType: String?,
+        @JsonProperty("quality")      val quality: String?,
         @JsonProperty("qualityLabel") val qualityLabel: String?
     )
 }

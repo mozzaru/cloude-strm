@@ -92,19 +92,15 @@ class YunshanID : MainAPI() {
         val ep = parseJson<Episode>(data)
         Log.d("YunshanID", "Episode ID=${ep.id}, epNumber=${ep.epNumber}")
 
-        val allUrls = mutableSetOf<String>()
+        val allUrls = mutableListOf<String>()
 
-        ep.videoUrl?.let {
-            Log.d("YunshanID", "videoUrl: $it")
-            allUrls.add(it)
-        }
+        ep.videoUrl?.let { allUrls.add(it) }
         ep.servers?.forEach { server ->
-            Log.d("YunshanID", "server: name=${server.name}, url=${server.url}")
             server.url?.let { allUrls.add(it) }
             server.embedUrl?.let { allUrls.add(it) }
         }
 
-        Log.d("YunshanID", "Total URL: ${allUrls.size}, downloads diabaikan")
+        Log.d("YunshanID", "Total URL: ${allUrls.size}")
 
         if (allUrls.isEmpty()) {
             Log.e("YunshanID", "Tidak ada URL!")
@@ -113,19 +109,31 @@ class YunshanID : MainAPI() {
 
         val driveFileIdRegex = Regex("/file/d/([a-zA-Z0-9_-]{10,})")
         val processedDriveIds = mutableSetOf<String>()
+        val processedUrls     = mutableSetOf<String>()
 
         allUrls.forEach { url ->
-            if (url.contains("drive.google.com")) {
-                val fileId = driveFileIdRegex.find(url)?.groupValues?.get(1)
-                if (fileId == null || !processedDriveIds.add(fileId)) {
-                    Log.d("YunshanID", "Skip Drive (null/duplikat): $url")
-                    return@forEach
+            when {
+                url.contains("drive.google.com") -> {
+                    val fileId = driveFileIdRegex.find(url)?.groupValues?.get(1)
+                    if (fileId == null) {
+                        Log.d("YunshanID", "Skip Drive - gagal parse fileId: $url")
+                        return@forEach
+                    }
+                    if (!processedDriveIds.add(fileId)) {
+                        Log.d("YunshanID", "Skip Drive duplikat fileId=$fileId")
+                        return@forEach
+                    }
+                    Log.d("YunshanID", "Drive -> GdriveExtractor: $fileId")
+                    GdriveExtractor().getUrl(url, "$mainUrl/", subtitleCallback, callback)
                 }
-                Log.d("YunshanID", "Drive -> GdriveExtractor langsung: $fileId")
-                GdriveExtractor().getUrl(url, "$mainUrl/", subtitleCallback, callback)
-            } else {
-                Log.d("YunshanID", "loadExtractor -> $url")
-                loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+                else -> {
+                    if (!processedUrls.add(url)) {
+                        Log.d("YunshanID", "Skip duplikat URL: $url")
+                        return@forEach
+                    }
+                    Log.d("YunshanID", "loadExtractor -> $url")
+                    loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+                }
             }
         }
 
