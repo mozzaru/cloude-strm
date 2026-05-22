@@ -9,12 +9,12 @@ class DonghuaArenaProvider: Plugin() {
     override fun load() {
         registerMainAPI(DonghuaArena())
 
-        // Register core extractors first
-        registerExtractorAPI(Bysezejataos())
-        registerExtractorAPI(ByseBuho())
-        registerExtractorAPI(ByseQekaho())
-        registerExtractorAPI(ByseVepoin())
+        // Custom extractors with high priority for problematic domains
+        registerExtractorAPI(ByseUniversal())
+        registerExtractorAPI(ByseUniversal2())
+        registerExtractorAPI(MyVidPlay())
 
+        // Explicitly register common core extractors
         registerExtractorAPI(DoodLaExtractor())
         registerExtractorAPI(DoodToExtractor())
         registerExtractorAPI(DoodSoExtractor())
@@ -39,8 +39,6 @@ class DonghuaArenaProvider: Plugin() {
         registerExtractorAPI(Vidara())
         registerExtractorAPI(VidaraSo())
         registerExtractorAPI(Playmogo())
-        registerExtractorAPI(MyVidPlay())
-        registerExtractorAPI(ByseFallback())
 
         registerExtractorAPI(ArchiveOrg())
         registerExtractorAPI(DTube())
