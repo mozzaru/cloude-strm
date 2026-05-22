@@ -12,10 +12,11 @@ class GdriveExtractor : ExtractorApi() {
     override var mainUrl = "https://drive.google.com"
     override val requiresReferer = false
 
+    // Cocokkan ID dari berbagai format URL Drive
     private val fileIdRegex = listOf(
-        Regex("/file/d/([a-zA-Z0-9_-]+)"),
-        Regex("[?&]id=([a-zA-Z0-9_-]+)"),
-        Regex("/open\\?id=([a-zA-Z0-9_-]+)")
+        Regex("/file/d/([a-zA-Z0-9_-]{10,})"),   // /file/d/ID/preview atau /file/d/ID/view
+        Regex("[?&]id=([a-zA-Z0-9_-]{10,})"),    // ?id=ID atau &id=ID
+        Regex("/open\\?id=([a-zA-Z0-9_-]{10,})") // /open?id=ID
     )
 
     override suspend fun getUrl(

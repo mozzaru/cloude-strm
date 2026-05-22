@@ -118,7 +118,13 @@ class YunshanID : MainAPI() {
 
         allUrls.forEach { url ->
             Log.d("YunshanID", "loadExtractor -> $url")
-            loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+            if (url.contains("drive.google.com")) {
+                // Panggil GdriveExtractor langsung — bypass loadExtractor
+                Log.d("YunshanID", "Drive URL terdeteksi, panggil GdriveExtractor langsung")
+                GdriveExtractor().getUrl(url, "$mainUrl/", subtitleCallback, callback)
+            } else {
+                loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+            }
         }
 
         return true
