@@ -92,19 +92,24 @@ class YunshanID : MainAPI() {
         val ep = parseJson<Episode>(data)
         Log.d("YunshanID", "Episode ID=${ep.id}, epNumber=${ep.epNumber}")
 
-        Log.d("YunshanID", "videoUrl: ${ep.videoUrl}")
-        ep.servers?.forEachIndexed { i, server ->
-            Log.d("YunshanID", "server[$i]: name=${server.name} | url=${server.url} | embed=${server.embedUrl}")
-        }
-
         val allUrls = mutableSetOf<String>()
-        ep.videoUrl?.let { allUrls.add(it) }
+
+        ep.videoUrl?.let {
+            Log.d("YunshanID", "videoUrl: $it")
+            allUrls.add(it)
+        }
         ep.servers?.forEach { server ->
+            Log.d("YunshanID", "server: name=${server.name}, url=${server.url}")
             server.url?.let { allUrls.add(it) }
             server.embedUrl?.let { allUrls.add(it) }
         }
 
-        Log.d("YunshanID", "Total URL unik: ${allUrls.size}")
+        Log.d("YunshanID", "Total URL: ${allUrls.size}, downloads diabaikan")
+
+        if (allUrls.isEmpty()) {
+            Log.e("YunshanID", "Tidak ada URL!")
+            return false
+        }
 
         allUrls.forEach { url ->
             Log.d("YunshanID", "loadExtractor -> $url")
@@ -113,8 +118,6 @@ class YunshanID : MainAPI() {
 
         return true
     }
-
-    // ─── Data classes ────────────────────────────────────────────
 
     private fun DonghuaResponse.toSearchResponse(): SearchResponse {
         val type = if (this.type?.contains("Movie", ignoreCase = true) == true)
