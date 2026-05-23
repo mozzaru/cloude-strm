@@ -64,7 +64,8 @@ class Donghub : MainAPI() {
             val latestSection = document.select("div.bixbox").firstOrNull { box ->
                 box.selectFirst("div.releases.latesthome") != null
             }
-            latestSection?.select("article.bs")?.mapNotNull { it.toSearchResult() } ?: document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+            latestSection?.select("article.bs")?.mapNotNull { it.toSearchResult() }
+                ?: document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         } else {
             document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         }.distinctBy { it.url }
@@ -79,7 +80,7 @@ class Donghub : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
-        val rawTitle = aTag.attr("title").ifBlank { 
+        val rawTitle = aTag.attr("title").ifBlank {
             selectFirst("div.tt")?.ownText().orEmpty()
         }.ifBlank { aTag.text() }.trim()
         val href = fixUrl(aTag.attr("href"))
@@ -98,13 +99,31 @@ class Donghub : MainAPI() {
             typeLabel.contains("movie")
         ) TvType.Movie else TvType.Anime
 
+        // Episode number
         val epxText = selectFirst("span.epx")?.text().orEmpty()
-        val statusLabel = selectFirst("div.bt span")?.text()?.lowercase().orEmpty()
-        val titleWithStatus = if ("tamat" in epxText.lowercase() || "complete" in statusLabel) {
-            "$rawTitle (Completed)"
-        } else rawTitle
+        val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()  // "Episode 154"
 
-        val epNum = epxText.replace(Regex("[^0-9]"), "").toIntOrNull()
+        // Prefer eggepisode number; fall back to epx number
+        val epNum: Int? = eggEpText.replace(Regex("[^0-9]"), "").toIntOrNull()
+            ?: epxText.replace(Regex("[^0-9]"), "").toIntOrNull()
+
+        // Status
+        val statusDiv = selectFirst("div.status")?.text()?.lowercase().orEmpty()
+        val epxLower = epxText.lowercase()
+        val isCompleted = "tamat" in epxLower || "complete" in epxLower ||
+                "completed" in epxLower || "completed" in statusDiv
+        val isOngoing  = "ongoing" in epxLower || "ongoing" in statusDiv
+        val isHiatus   = "hiatus" in epxLower  || "hiatus"  in statusDiv
+
+        val statusSuffix = when {
+            isCompleted -> " (Completed)"
+            isOngoing   -> " (Ongoing)"
+            isHiatus    -> " (Hiatus)"
+            else        -> ""
+        }
+        val titleWithStatus = "$rawTitle$statusSuffix"
+
+        // Sub / Dub label
         val subLabel = selectFirst("span.sb")?.text()?.lowercase().orEmpty()
 
         return newAnimeSearchResponse(titleWithStatus, href, type) {
@@ -112,7 +131,7 @@ class Donghub : MainAPI() {
             when {
                 "sub" in subLabel -> addSub(epNum)
                 "dub" in subLabel -> addDub(epNum)
-                else -> addSub(epNum)
+                else              -> addSub(epNum)
             }
         }
     }
@@ -126,10 +145,13 @@ class Donghub : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val initialDocument = app.get(url, headers = baseHeaders).document
 
-        // Check if it's an episode page
-        val seriesLink = initialDocument.selectFirst("div.breadcrumb a[href*=\"/anime/\"], div.breadcrumb a[href*=\"/series/\"], span.all-episodes a")
-            ?.attr("href")
-            ?: initialDocument.selectFirst("div.nvs.nvsc a")?.attr("href") // "All Episodes" button in some themes
+        // Redirect episode page → series page
+        val seriesLink = initialDocument.selectFirst(
+            "div.breadcrumb a[href*=\"/anime/\"], " +
+            "div.breadcrumb a[href*=\"/series/\"], " +
+            "span.all-episodes a"
+        )?.attr("href")
+            ?: initialDocument.selectFirst("div.nvs.nvsc a")?.attr("href")
 
         if (!seriesLink.isNullOrBlank() && url.contains("-episode-")) {
             return load(fixUrl(seriesLink))
@@ -137,15 +159,32 @@ class Donghub : MainAPI() {
 
         val document = initialDocument
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+
         var poster = document.selectFirst("div.ime > img")?.attr("src").orEmpty()
         if (poster.isEmpty()) {
             poster = document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
         }
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
 
-        // Selector fix sesuai HTML aktual Donghub
-        val episodeList = document.select("div.eplister ul li")
+        // Genre
+        val genres = document.select("div.genxed a").map { it.text().trim() }
 
+        // Status
+        val statusRaw = document.select("div.spe span")
+            .firstOrNull { it.text().startsWith("Status:") }
+            ?.text()
+            ?.removePrefix("Status:")
+            ?.trim()
+            .orEmpty()
+
+        val showStatus = when (statusRaw.lowercase()) {
+            "ongoing"   -> ShowStatus.Ongoing
+            "completed" -> ShowStatus.Completed
+            else        -> null
+        }
+
+        // Episode list
+        val episodeList = document.select("div.eplister ul li")
         val isSeries = episodeList.isNotEmpty()
         val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
@@ -156,7 +195,7 @@ class Donghub : MainAPI() {
                 val epNumText = li.selectFirst("div.epl-num")?.text()?.trim().orEmpty()
                 val epNum = epNumText.replace(Regex("[^0-9]"), "").toIntOrNull()
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
-                
+
                 newEpisode(epHref) {
                     this.name = epTitle ?: "Episode $epNum"
                     this.episode = epNum
@@ -190,6 +229,8 @@ class Donghub : MainAPI() {
         return newTvSeriesLoadResponse(title, url, tvType, episodes) {
             this.posterUrl = poster
             this.plot = description
+            this.tags = genres
+            this.showStatus = showStatus
         }
     }
 
@@ -212,7 +253,6 @@ class Donghub : MainAPI() {
                 if (!iframeSrc.isNullOrBlank()) {
                     val finalUrl = if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
                     println("🎯 [Donghub] Trying to extract: $finalUrl")
-
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             } catch (e: Exception) {
