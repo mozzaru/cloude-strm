@@ -1,4 +1,4 @@
-package com.anichin
+package com.Anichin
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
