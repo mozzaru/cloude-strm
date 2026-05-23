@@ -163,7 +163,8 @@ class Anichin : MainAPI() {
         val raw = img.attr("src")
             .ifBlank { img.attr("data-src") }
             .ifBlank { img.attr("data-lazy-src") }
-        val fixed = if (raw.startsWith("//")) "https:$raw" else raw
+        val cleaned = raw.split("?")[0]
+        val fixed = if (cleaned.startsWith("//")) "https:$cleaned" else cleaned
         return fixUrlNull(fixed)
     }
 

@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 10
+version = 11
 
 cloudstream {
     description = "Streaming Anime and Donghua"
@@ -11,5 +11,5 @@ cloudstream {
     tvTypes = listOf("AnimeMovie","Anime")
     iconUrl = "https://v18.kuramanime.ing/assets/img/logo-full-512.png"
 
-    isCrossPlatform = false
+    isCrossPlatform = true
 }
