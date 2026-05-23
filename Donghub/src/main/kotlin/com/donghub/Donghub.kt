@@ -14,7 +14,9 @@ class Donghub : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9",
-        "Cache-Control" to "max-age=0",
+        "Cache-Control" to "no-cache, no-store, must-revalidate",
+        "Pragma" to "no-cache",
+        "Expires" to "0",
         "Upgrade-Insecure-Requests" to "1",
         "Referer" to "https://www.google.com/",
         "Sec-Ch-Ua" to "\"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"8\"",
@@ -25,6 +27,7 @@ class Donghub : MainAPI() {
         "Sec-Fetch-Site" to "cross-site",
         "Sec-Fetch-User" to "?1"
     )
+
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
@@ -37,6 +40,15 @@ class Donghub : MainAPI() {
         "anime/?status=completed&type=" to "Completed",
         "anime/?status=&type=movie&order=" to "Movie"
     )
+
+    private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
+
+    private fun episodeUrlToSeriesUrl(epUrl: String): String? {
+        val match = episodeUrlRegex.find(epUrl) ?: return null
+        val basePath = epUrl.substring(0, match.range.first)
+
+        return "$basePath/"
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (request.data == "popular-today") {
@@ -78,6 +90,24 @@ class Donghub : MainAPI() {
         )
     }
 
+    private fun extractEpNumFromText(text: String): Int? {
+        return Regex("episode[- ](\\d+)", RegexOption.IGNORE_CASE)
+            .find(text)
+            ?.groupValues?.get(1)
+            ?.toIntOrNull()
+    }
+
+    private fun isGenericTemplate(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("watch streaming") ||
+               lower.contains("you can also download") ||
+               lower.contains("don't forget to watch online") ||
+               lower.contains("watch full episodes") ||
+               lower.contains("english subbed on donghub") ||
+               lower.contains("subtitle indonesia hanya di") ||
+               text.length < 30
+    }
+
     private fun Element.toSearchResult(): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val rawTitle = aTag.attr("title").ifBlank {
@@ -99,34 +129,46 @@ class Donghub : MainAPI() {
             typeLabel.contains("movie")
         ) TvType.Movie else TvType.Anime
 
-        // Episode number
-        val epxText = selectFirst("span.epx")?.text().orEmpty()
-        val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()
+        val isEggLayout = selectFirst("div.egghead") != null
 
-        // Prefer eggepisode number; fall back to epx number
-        val epNum: Int? = eggEpText.replace(Regex("[^0-9]"), "").toIntOrNull()
-            ?: epxText.replace(Regex("[^0-9]"), "").toIntOrNull()
+        val epNum: Int?
+        val isCompleted: Boolean
+        val isOngoing: Boolean
+        val isHiatus: Boolean
 
-        // Status
-        val statusDiv = selectFirst("div.status")?.text()?.lowercase().orEmpty()
-        val epxLower = epxText.lowercase()
-        val isCompleted = "tamat" in epxLower || "complete" in epxLower ||
-                "completed" in epxLower || "completed" in statusDiv
-        val isOngoing  = "ongoing" in epxLower || "ongoing" in statusDiv
-        val isHiatus   = "hiatus" in epxLower  || "hiatus"  in statusDiv
+        if (isEggLayout) {
+            val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()
+            epNum = extractEpNumFromText(eggEpText)
+            isCompleted = false
+            isOngoing   = epNum != null
+            isHiatus    = false
+        } else {
+            val epxText   = selectFirst("span.epx")?.text().orEmpty()
+            val epxLower  = epxText.lowercase()
+            val statusDiv = selectFirst("div.status")?.text()?.lowercase().orEmpty()
+
+            isCompleted = "tamat"     in epxLower || "complete" in epxLower ||
+                          "completed" in epxLower || "completed" in statusDiv
+            isOngoing   = "ongoing"   in epxLower || "ongoing"  in statusDiv
+            isHiatus    = "hiatus"    in epxLower || "hiatus"   in statusDiv
+
+            val imgTitle = img?.attr("title").orEmpty()
+            val aTitle   = aTag.attr("title").orEmpty()
+            epNum = extractEpNumFromText(imgTitle)
+                ?: extractEpNumFromText(aTitle)
+                ?: extractEpNumFromText(href)
+        }
 
         val statusSuffix = when {
             isCompleted -> " (Completed)"
-            isOngoing   -> " (Ongoing)"
             isHiatus    -> " (Hiatus)"
+            isOngoing   -> " (Ongoing)"
             else        -> ""
         }
-        val titleWithStatus = "$rawTitle$statusSuffix"
 
-        // Sub / Dub label
         val subLabel = selectFirst("span.sb")?.text()?.lowercase().orEmpty()
 
-        return newAnimeSearchResponse(titleWithStatus, href, type) {
+        return newAnimeSearchResponse("$rawTitle$statusSuffix", href, type) {
             this.posterUrl = posterUrl
             when {
                 "sub" in subLabel -> addSub(epNum)
@@ -143,28 +185,39 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val initialDocument = app.get(url, headers = baseHeaders).document
-
-        // Redirect episode page → series page
-        val seriesLink = initialDocument.selectFirst(
-            "div.breadcrumb a[href*=\"/anime/\"], " +
-            "div.breadcrumb a[href*=\"/series/\"], " +
-            "span.all-episodes a"
-        )?.attr("href")
-            ?: initialDocument.selectFirst("div.nvs.nvsc a")?.attr("href")
-
-        if (!seriesLink.isNullOrBlank() && url.contains("-episode-")) {
-            return load(fixUrl(seriesLink))
+        val seriesUrl = if (episodeUrlRegex.containsMatchIn(url)) {
+            episodeUrlToSeriesUrl(url) ?: url
+        } else {
+            url
         }
 
-        val document = initialDocument
+        val document = app.get(seriesUrl, headers = baseHeaders).document
+
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
         var poster = document.selectFirst("div.ime > img")?.attr("src").orEmpty()
         if (poster.isEmpty()) {
             poster = document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
         }
-        val description = document.selectFirst("div.entry-content")?.text()?.trim()
+
+        // Deskripsi / Sinopsis
+        val synopsis = run {
+            val synpEl = document.selectFirst("div.bixbox.synp div.entry-content")
+            synpEl?.selectFirst("h1")?.remove()
+            val synpText    = synpEl?.text()?.trim().orEmpty()
+            val descText    = document.selectFirst("div.desc")?.text()?.trim().orEmpty()
+            val mindescText = document.selectFirst("div.mindesc")?.text()?.trim().orEmpty()
+            val metaDesc    = document.selectFirst("meta[property=og:description]")
+                ?.attr("content")?.trim().orEmpty()
+
+            when {
+                synpText.isNotBlank()    && !isGenericTemplate(synpText)    -> synpText
+                descText.isNotBlank()    && !isGenericTemplate(descText)    -> descText
+                mindescText.isNotBlank() && !isGenericTemplate(mindescText) -> mindescText
+                metaDesc.isNotBlank()    && metaDesc != title               -> metaDesc
+                else -> null
+            }
+        }
 
         // Genre
         val genres = document.select("div.genxed a").map { it.text().trim() }
@@ -185,51 +238,47 @@ class Donghub : MainAPI() {
 
         // Episode list
         val episodeList = document.select("div.eplister ul li")
-        val isSeries = episodeList.isNotEmpty()
-        val tvType = if (isSeries) TvType.Anime else TvType.Movie
+        val isSeries    = episodeList.isNotEmpty()
+        val tvType      = if (isSeries) TvType.Anime else TvType.Movie
 
         val episodes = if (isSeries) {
             episodeList.mapNotNull { li ->
-                val a = li.selectFirst("a") ?: return@mapNotNull null
+                val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-                val epNumText = li.selectFirst("div.epl-num")?.text()?.trim().orEmpty()
-                val epNum = epNumText.replace(Regex("[^0-9]"), "").toIntOrNull()
+                val epNum  = li.selectFirst("div.epl-num")?.text()?.trim()
+                    ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
 
                 newEpisode(epHref) {
-                    this.name = epTitle ?: "Episode $epNum"
+                    this.name    = epTitle ?: "Episode $epNum"
                     this.episode = epNum
-                    this.posterUrl = poster
                 }
             }.reversed()
         } else {
             val firstOption = document.selectFirst(".mobius option")
-            val base64 = firstOption?.attr("value")?.trim()
+            val base64      = firstOption?.attr("value")?.trim()
             var playUrl: String? = null
 
             if (!base64.isNullOrBlank()) {
                 try {
                     val decoded = base64Decode(base64)
-                    val iframe = Jsoup.parse(decoded).selectFirst("iframe")
-                    val rawSrc = iframe?.attr("src")
+                    val iframe  = Jsoup.parse(decoded).selectFirst("iframe")
+                    val rawSrc  = iframe?.attr("src")
                     if (!rawSrc.isNullOrBlank()) {
                         playUrl = if (rawSrc.startsWith("http")) rawSrc else "https:$rawSrc"
                     }
                 } catch (_: Exception) {}
             }
 
-            if (playUrl == null) playUrl = url
+            if (playUrl == null) playUrl = seriesUrl
 
-            listOf(newEpisode(playUrl) {
-                name = "Movie"
-                posterUrl = poster
-            })
+            listOf(newEpisode(playUrl) { name = "Movie" })
         }
 
-        return newTvSeriesLoadResponse(title, url, tvType, episodes) {
-            this.posterUrl = poster
-            this.plot = description
-            this.tags = genres
+        return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
+            this.posterUrl  = poster
+            this.plot       = synopsis
+            this.tags       = genres
             this.showStatus = showStatus
         }
     }
@@ -247,16 +296,18 @@ class Donghub : MainAPI() {
             if (base64.isBlank()) return@forEach
 
             try {
-                val decoded = base64Decode(base64)
-                val iframe = Jsoup.parse(decoded).selectFirst("iframe")
-                val iframeSrc = iframe?.attr("src")?.ifBlank { iframe.attr("data-src") }?.trim()
+                val decoded   = base64Decode(base64)
+                val iframe    = Jsoup.parse(decoded).selectFirst("iframe")
+                val iframeSrc = iframe?.attr("src")
+                    ?.ifBlank { iframe.attr("data-src") }?.trim()
+
                 if (!iframeSrc.isNullOrBlank()) {
                     val finalUrl = if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
-                    println("🎯 [Donghub] Trying to extract: $finalUrl")
+                    println("🎯 [Donghub] Extracting: $finalUrl")
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                 }
             } catch (e: Exception) {
-                println("❌ [Donghub] Error decoding Base64 or extracting: ${e.message}")
+                println("❌ [Donghub] Error: ${e.message}")
             }
         }
 
