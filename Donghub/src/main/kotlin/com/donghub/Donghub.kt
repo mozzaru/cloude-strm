@@ -101,7 +101,7 @@ class Donghub : MainAPI() {
 
         // Episode number
         val epxText = selectFirst("span.epx")?.text().orEmpty()
-        val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()  // "Episode 154"
+        val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()
 
         // Prefer eggepisode number; fall back to epx number
         val epNum: Int? = eggEpText.replace(Regex("[^0-9]"), "").toIntOrNull()
