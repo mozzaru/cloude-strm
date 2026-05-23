@@ -1,4 +1,4 @@
-package com.Anichin
+package com.anichin
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -36,7 +36,6 @@ class Anichin : MainAPI() {
         "anime/?status=&type=Movie&order=update" to "Movie"
     )
 
-    // MAIN PAGE
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when (request.data) {
             ""              -> getLatestFromHome(page, request.name)
@@ -46,27 +45,22 @@ class Anichin : MainAPI() {
         }
     }
 
-    // Rilisan Terbaru
     private suspend fun getLatestFromHome(page: Int, name: String): HomePageResponse {
         val url      = if (page == 1) mainUrl else "$mainUrl/page/$page/"
         val document = app.get(url, headers = browserHeaders).document
-
         val section = document.select("div.bixbox").firstOrNull {
             it.selectFirst("div.releases.latesthome") != null
         }
         val items = section?.select("article.bs")
             ?.mapNotNull { it.toSearchResult() }
             ?: emptyList()
-
         val hasNext = hasNextPage(document)
         return newHomePageResponse(HomePageList(name, items, isHorizontalImages = false), hasNext)
     }
 
-    // Populer Hari Ini
     private suspend fun getPopularTodayFromHome(page: Int, name: String): HomePageResponse {
         if (page > 1) return emptyHomeResponse(name)
         val document = app.get(mainUrl, headers = browserHeaders).document
-
         val section = document.select("div.bixbox").firstOrNull {
             it.selectFirst("div.releases.hothome") != null
         }
@@ -74,15 +68,12 @@ class Anichin : MainAPI() {
             ?.select("div.listupd.popularslider article.bs")
             ?.mapNotNull { it.toSearchResult() }
             ?: emptyList()
-
         return newHomePageResponse(HomePageList(name, items, isHorizontalImages = false), false)
     }
 
-    // Rekomendasi
     private suspend fun getRekomendasiFromHome(page: Int, name: String): HomePageResponse {
         if (page > 1) return emptyHomeResponse(name)
         val document = app.get(mainUrl, headers = browserHeaders).document
-
         val section = document.select("div.bixbox").firstOrNull {
             it.selectFirst("div.releases h3")
                 ?.text()?.contains("Rekomendasi", ignoreCase = true) == true
@@ -90,71 +81,54 @@ class Anichin : MainAPI() {
         val items = section?.select("div.series-gen article.bs")
             ?.mapNotNull { it.toSearchResult() }
             ?: emptyList()
-
         return newHomePageResponse(HomePageList(name, items, isHorizontalImages = false), false)
     }
 
-    // kategori
     private suspend fun getKategoriPage(page: Int, request: MainPageRequest): HomePageResponse {
         val data     = request.data
         val hasQuery = '?' in data
-
         val url = when {
             hasQuery && page == 1  -> "$mainUrl/$data"
             hasQuery               -> "$mainUrl/$data&page=$page"
             page == 1              -> "$mainUrl/$data/"
             else                   -> "$mainUrl/$data/page/$page/"
         }
-
         val document = app.get(url, headers = browserHeaders).document
         val items    = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
-        val hasNext = hasNextPage(document)
-
+        val hasNext  = hasNextPage(document)
         return newHomePageResponse(HomePageList(request.name, items, isHorizontalImages = false), hasNext)
     }
 
-    // SEARCH
     override suspend fun search(query: String): List<SearchResponse> {
         val url      = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = app.get(url, headers = browserHeaders).document
         return document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
     }
 
-
-    // CARD PARSER
     private fun Element.toSearchResult(): SearchResponse? {
         val aTag = selectFirst("div.bsx > a") ?: return null
         val href = fixUrl(aTag.attr("href"))
-
         val title = selectFirst("div.tt")?.ownText()?.trim()
             .takeIf { !it.isNullOrBlank() }
             ?: aTag.attr("title").ifBlank { aTag.text() }
-
         val poster = extractPoster(aTag)
-
         val typeText = selectFirst(".typez")?.text()?.trim() ?: ""
         val tvType   = if (typeText.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
-
         val epxText   = selectFirst("span.epx")?.text()?.trim() ?: ""
         var epxNumber = Regex("\\d+").find(epxText)?.value?.toIntOrNull()
-
         if (epxNumber == null) {
             val titleText = aTag.attr("title")
             epxNumber = Regex("""Episode\s+(\d+)""", RegexOption.IGNORE_CASE)
                 .find(titleText)?.groupValues?.getOrNull(1)?.toIntOrNull()
         }
-
         if (epxNumber == null) {
             val h2Text = selectFirst("h2")?.text() ?: ""
             epxNumber = Regex("""Episode\s+(\d+)""", RegexOption.IGNORE_CASE)
                 .find(h2Text)?.groupValues?.getOrNull(1)?.toIntOrNull()
         }
-
-        val dubStatus = DubStatus.Subbed
-
         return newAnimeSearchResponse(title, href, tvType) {
             this.posterUrl = poster
-            addDubStatus(dubStatus, epxNumber)
+            addDubStatus(DubStatus.Subbed, epxNumber)
         }
     }
 
@@ -171,14 +145,11 @@ class Anichin : MainAPI() {
     private fun parseEpisodeFromSpan(spanText: String, h3Text: String): Pair<Int?, String?> {
         val parts   = spanText.split(" - ")
         val epsPart = parts.getOrNull(0)?.trim() ?: ""
-
         var epNum = Regex("\\d+").find(epsPart)?.value?.toIntOrNull()
-
         if (epNum == null && h3Text.isNotBlank()) {
             epNum = Regex("""Episode\s+(\d+)""", RegexOption.IGNORE_CASE)
                 .find(h3Text)?.groupValues?.getOrNull(1)?.toIntOrNull()
         }
-
         val datePattern = Regex(
             "^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d"
         )
@@ -186,11 +157,9 @@ class Anichin : MainAPI() {
         val epTheme = if (secondPart != null && !datePattern.containsMatchIn(secondPart)) {
             secondPart.ifBlank { null }
         } else null
-
         return Pair(epNum, epTheme)
     }
 
-    // LOAD
     override suspend fun load(url: String): LoadResponse {
         val isEpisodeUrl = url.contains("-episode-") || url.contains("-subtitle-indonesia")
 
@@ -208,8 +177,9 @@ class Anichin : MainAPI() {
                     ?.replace(Regex("\\s*Episode\\s+\\d+.*", RegexOption.IGNORE_CASE), "")?.trim()
                 ?: ""
 
-            val poster      = epDoc.selectFirst("meta[property=og:image]")?.attr("content")
-                ?: epDoc.selectFirst("div.ime > img")?.attr("src") ?: ""
+            val poster = epDoc.selectFirst("div.thumb img")?.attr("src")
+                ?: epDoc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
+
             val description = epDoc.selectFirst("div.entry-content")?.text()?.trim()
             val genres      = epDoc.select("div.genxed a").map { it.text().trim() }
             val showStatus  = parseShowStatus(epDoc.select("div.spe span").map { it.text() })
@@ -218,18 +188,14 @@ class Anichin : MainAPI() {
             val episodes = epDoc.select("div.episodelist ul li").mapNotNull { li ->
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-
                 val dataId = li.attr("data-id").toIntOrNull() ?: return@mapNotNull null
                 if (!seenIds.add(dataId)) return@mapNotNull null
-
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
                 val h3Text   = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
                 val (epNum, epTheme) = parseEpisodeFromSpan(spanText, h3Text)
-
                 val epPoster = li.selectFirst("div.thumbnel img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
-
                 newEpisode(epHref) {
                     this.name      = epTheme
                     this.episode   = epNum
@@ -248,10 +214,12 @@ class Anichin : MainAPI() {
             }
         }
 
-        val document    = app.get(seriesUrl, headers = browserHeaders).document
-        val title       = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
-        val poster      = document.selectFirst("div.ime > img")?.attr("src")
+        val document = app.get(seriesUrl, headers = browserHeaders).document
+        val title    = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+
+        val poster = document.selectFirst("div.thumb img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
+
         val description = document.selectFirst("div.entry-content, div.desc")?.text()?.trim()
         val genres      = document.select("div.genxed a").map { it.text().trim() }
         val showStatus  = parseShowStatus(document.select("div.spe span").map { it.text() })
@@ -266,14 +234,12 @@ class Anichin : MainAPI() {
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 if (!seenHrefs.add(epHref)) return@mapNotNull null
-
                 val epNumRaw = li.selectFirst("div.epl-num")?.text()?.trim() ?: ""
                 val epNum    = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
                 val epTitle  = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
                 val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
-
                 newEpisode(epHref) {
                     this.name      = epTitle
                     this.episode   = epNum
@@ -281,7 +247,6 @@ class Anichin : MainAPI() {
                 }
             }.reversed()
         } else {
-            // Movie: decode Base64 iframe
             val base64 = document.selectFirst(".mobius option[value]")?.attr("value")?.trim()
             var playUrl: String? = null
             if (!base64.isNullOrBlank()) {
@@ -307,7 +272,6 @@ class Anichin : MainAPI() {
         }
     }
 
-    // LOAD LINKS
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -329,12 +293,6 @@ class Anichin : MainAPI() {
         return true
     }
 
-    // HELPERS
-
-    /**
-     * Parse ShowStatus dari span-span div.spe.
-     * HTML: <span><b>Status:</b> Ongoing</span>
-     */
     private fun parseShowStatus(spans: List<String>): ShowStatus? {
         val text = spans.firstOrNull { it.contains("Status", ignoreCase = true) } ?: return null
         return when {
