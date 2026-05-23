@@ -46,7 +46,6 @@ class Donghub : MainAPI() {
     private fun episodeUrlToSeriesUrl(epUrl: String): String? {
         val match = episodeUrlRegex.find(epUrl) ?: return null
         val basePath = epUrl.substring(0, match.range.first)
-
         return "$basePath/"
     }
 
@@ -92,9 +91,7 @@ class Donghub : MainAPI() {
 
     private fun extractEpNumFromText(text: String): Int? {
         return Regex("episode[- ](\\d+)", RegexOption.IGNORE_CASE)
-            .find(text)
-            ?.groupValues?.get(1)
-            ?.toIntOrNull()
+            .find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun isGenericTemplate(text: String): Boolean {
@@ -105,7 +102,27 @@ class Donghub : MainAPI() {
                lower.contains("watch full episodes") ||
                lower.contains("english subbed on donghub") ||
                lower.contains("subtitle indonesia hanya di") ||
+               lower.contains("mp4 mkv hardsub softsub") ||
+               lower.contains("360p") || lower.contains("480p") ||
+               lower.contains("720p") || lower.contains("terabox") ||
+               lower.contains("mirrored") ||
                text.length < 30
+    }
+
+    private fun cleanEpisodeTitle(rawTitle: String, seriesTitle: String, epNum: Int?): String {
+        var clean = rawTitle
+
+        if (seriesTitle.isNotBlank()) {
+            clean = clean.replace(seriesTitle, "", ignoreCase = true)
+        }
+
+        clean = clean
+            .replace(Regex("subtitle indonesia", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("sub indo", RegexOption.IGNORE_CASE), "")
+            .trim { it == ' ' || it == '-' }
+            .trim()
+
+        return if (clean.length < 3) "Episode $epNum" else clean
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -138,7 +155,7 @@ class Donghub : MainAPI() {
 
         if (isEggLayout) {
             val eggEpText = selectFirst("div.eggepisode")?.text().orEmpty()
-            epNum = extractEpNumFromText(eggEpText)
+            epNum       = extractEpNumFromText(eggEpText)
             isCompleted = false
             isOngoing   = epNum != null
             isHiatus    = false
@@ -187,9 +204,7 @@ class Donghub : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val seriesUrl = if (episodeUrlRegex.containsMatchIn(url)) {
             episodeUrlToSeriesUrl(url) ?: url
-        } else {
-            url
-        }
+        } else url
 
         val document = app.get(seriesUrl, headers = baseHeaders).document
 
@@ -200,7 +215,7 @@ class Donghub : MainAPI() {
             poster = document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
         }
 
-        // Deskripsi / Sinopsis
+        //Deskripsi / Sinopsis
         val synopsis = run {
             val synpEl = document.selectFirst("div.bixbox.synp div.entry-content")
             synpEl?.selectFirst("h1")?.remove()
@@ -225,10 +240,7 @@ class Donghub : MainAPI() {
         // Status
         val statusRaw = document.select("div.spe span")
             .firstOrNull { it.text().startsWith("Status:") }
-            ?.text()
-            ?.removePrefix("Status:")
-            ?.trim()
-            .orEmpty()
+            ?.text()?.removePrefix("Status:")?.trim().orEmpty()
 
         val showStatus = when (statusRaw.lowercase()) {
             "ongoing"   -> ShowStatus.Ongoing
@@ -245,13 +257,17 @@ class Donghub : MainAPI() {
             episodeList.mapNotNull { li ->
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-                val epNum  = li.selectFirst("div.epl-num")?.text()?.trim()
+
+                val epNum = li.selectFirst("div.epl-num")?.text()?.trim()
                     ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-                val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()
+
+                val rawEpTitle = li.selectFirst("div.epl-title")?.text()?.trim().orEmpty()
+                val cleanTitle = cleanEpisodeTitle(rawEpTitle, title, epNum)
 
                 newEpisode(epHref) {
-                    this.name    = epTitle ?: "Episode $epNum"
-                    this.episode = epNum
+                    this.name      = cleanTitle
+                    this.episode   = epNum
+                    this.posterUrl = poster
                 }
             }.reversed()
         } else {
@@ -272,7 +288,10 @@ class Donghub : MainAPI() {
 
             if (playUrl == null) playUrl = seriesUrl
 
-            listOf(newEpisode(playUrl) { name = "Movie" })
+            listOf(newEpisode(playUrl) {
+                name       = "Movie"
+                posterUrl  = poster
+            })
         }
 
         return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
