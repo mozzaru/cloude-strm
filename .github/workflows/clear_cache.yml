@@ -1,0 +1,33 @@
+name: Clear Cache
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ClearCache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete All Caches
+        run: |
+          echo "Fetching all cache IDs..."
+          CACHE_IDS=$(gh cache list --limit 100 --json id | jq -r '.[].id')
+          
+          if [ -z "$CACHE_IDS" ]; then
+            echo "No caches found."
+          else
+            echo "$CACHE_IDS" | while read -r id; do
+              echo "Deleting cache: $id"
+              gh cache delete "$id" || true
+            done
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Verify
+        run: |
+          COUNT=$(gh cache list --json id | jq length)
+          echo "Remaining caches: $COUNT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
