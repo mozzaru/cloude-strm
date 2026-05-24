@@ -30,10 +30,8 @@ class MegaNzExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     companion object {
-        private const val TAG           = "MegaNzExtractor"
-        private const val MEGA_API      = "https://g.api.mega.co.nz/cs"
-        private const val PREFETCH_SIZE = 8 * 1024 * 1024L
-        private const val TAIL_SIZE     = 4 * 1024 * 1024L
+        private const val TAG       = "MegaNzExtractor"
+        private const val MEGA_API  = "https://g.api.mega.co.nz/cs"
 
         private val httpClient by lazy {
             OkHttpClient.Builder()
@@ -77,8 +75,7 @@ class MegaNzExtractor : ExtractorApi() {
                 json.jsonObject.mapValues { it.value.jsonPrimitive.content }
             } else null
         } catch (e: Exception) {
-            Log.w(TAG, "decryptAttrs failed: ${e.message}")
-            null
+            Log.w(TAG, "decryptAttrs failed: ${e.message}"); null
         }
 
         fun incrementIv(iv: ByteArray, delta: Long): ByteArray {
@@ -116,26 +113,6 @@ class MegaNzExtractor : ExtractorApi() {
             Qualities.P480.value  -> "480p"
             Qualities.P360.value  -> "360p"
             else                  -> "MP4"
-        }
-
-        data class MoovInfo(val offset: Long, val size: Long)
-
-        fun findMoov(data: ByteArray): MoovInfo? {
-            var i = 0
-            while (i + 8 <= data.size) {
-                val size = ((data[i].toLong()   and 0xFF) shl 24) or
-                           ((data[i+1].toLong() and 0xFF) shl 16) or
-                           ((data[i+2].toLong() and 0xFF) shl 8)  or
-                            (data[i+3].toLong() and 0xFF)
-                val type = String(data, i + 4, 4, Charsets.US_ASCII)
-                if (type == "moov") {
-                    Log.i(TAG, "moov found at offset=$i size=$size")
-                    return MoovInfo(i.toLong(), size)
-                }
-                if (size < 8) break
-                i += size.toInt()
-            }
-            return null
         }
     }
 
@@ -175,42 +152,7 @@ class MegaNzExtractor : ExtractorApi() {
             null
         }
     } catch (e: Exception) {
-        Log.e(TAG, "getFileInfo error: ${e.message}")
-        null
-    }
-
-    // Prefetch HEAD only — cepat, 8 MB pertama
-    private fun prefetchHead(
-        cdnUrl : String,
-        aesKey : ByteArray,
-        ctrIv  : ByteArray,
-        size   : Long
-    ): ByteArray {
-        val fetchSize = minOf(PREFETCH_SIZE, size)
-        Log.d(TAG, "Prefetch HEAD ${fetchSize / 1024} KB…")
-        val req = Request.Builder()
-            .url(cdnUrl)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
-            .header("Origin",  "https://mega.nz")
-            .header("Referer", "https://mega.nz/")
-            .header("Range",   "bytes=0-${fetchSize - 1}")
-            .build()
-        val resp   = httpClient.newCall(req).execute()
-        val body   = resp.body ?: return ByteArray(0)
-        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(ctrIv))
-        val out = ByteArrayOutputStream(fetchSize.toInt())
-        val buf = ByteArray(65536)
-        try {
-            val stream = body.byteStream()
-            while (true) {
-                val n = stream.read(buf); if (n <= 0) break
-                out.write(cipher.update(buf, 0, n) ?: continue)
-            }
-        } finally { body.close(); resp.close() }
-        val result = out.toByteArray()
-        Log.d(TAG, "Prefetch HEAD done: ${result.size / 1024} KB")
-        return result
+        Log.e(TAG, "getFileInfo error: ${e.message}"); null
     }
 
     override suspend fun getUrl(
@@ -232,8 +174,7 @@ class MegaNzExtractor : ExtractorApi() {
             Log.e(TAG, "decodeFileKey failed: ${e.message}"); return
         }
 
-        val finfo = getFileInfo(nodeId)
-        if (finfo == null) {
+        val finfo = getFileInfo(nodeId) ?: run {
             Log.w(TAG, "API failed → raw fallback")
             callback.invoke(newExtractorLink(source = name, name = name,
                 url = normaliseUrl(url), type = ExtractorLinkType.VIDEO) {
@@ -257,43 +198,25 @@ class MegaNzExtractor : ExtractorApi() {
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$quality")
         Log.d(TAG, "CDN: ${cdnUrl.take(72)}…")
 
-        // Prefetch HEAD saja (cepat ~20 detik), tail dilakukan async di proxy
-        // Ini mencegah getUrl hang terlalu lama sebelum callback dipanggil
-        var headCache      : ByteArray? = null
-        var moovFileOffset : Long       = -1L
-
-        if (fileSize > 0) {
-            val head = prefetchHead(cdnUrl, aesKey, ctrIv, fileSize)
-            headCache = head
-            val moovInHead = findMoov(head)
-            if (moovInHead != null) {
-                moovFileOffset = moovInHead.offset
-                Log.i(TAG, "moov in HEAD at offset=$moovFileOffset ✅ fast-start OK")
-            } else {
-                // moov di tail — proxy akan cari async saat ExoPlayer request tail
-                Log.w(TAG, "moov NOT in head — proxy will serve tail on-demand")
-                moovFileOffset = -1L
-            }
-        }
-
+        // Tidak ada prefetch — langsung start proxy dan callback
+        // ExoPlayer akan seek sendiri untuk cari moov atom
         activeProxy?.stop()
         Log.d(TAG, "Old proxy stopped")
 
         val proxy = MegaStreamProxy(
-            cdnUrl         = cdnUrl,
-            aesKey         = aesKey,
-            ctrIv          = ctrIv,
-            fileSize       = fileSize,
-            ext            = ext,
-            headCache      = headCache,
-            moovFileOffset = moovFileOffset
+            cdnUrl   = cdnUrl,
+            aesKey   = aesKey,
+            ctrIv    = ctrIv,
+            fileSize = fileSize,
+            ext      = ext
         )
         val port    = proxy.start()
         activeProxy = proxy
-        Log.i(TAG, "Proxy started on port $port → http://127.0.0.1:$port/video.$ext")
 
         val playUrl = "http://127.0.0.1:$port/video.$ext"
+        Log.i(TAG, "Proxy started on port $port → $playUrl")
 
+        // Nama: "Mega" saja (default) agar tidak ada isu label
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -309,13 +232,11 @@ class MegaNzExtractor : ExtractorApi() {
     }
 
     private inner class MegaStreamProxy(
-        private val cdnUrl         : String,
-        private val aesKey         : ByteArray,
-        private val ctrIv          : ByteArray,
-        private val fileSize       : Long,
-        private val ext            : String,
-        private val headCache      : ByteArray?,
-        private val moovFileOffset : Long
+        private val cdnUrl   : String,
+        private val aesKey   : ByteArray,
+        private val ctrIv    : ByteArray,
+        private val fileSize : Long,
+        private val ext      : String
     ) {
         private var serverSocket : ServerSocket? = null
         private val executor     = Executors.newCachedThreadPool()
@@ -379,22 +300,6 @@ class MegaNzExtractor : ExtractorApi() {
                         rangeEnd - rangeStart + 1 else -1L
 
                     Log.d(TAG, "Range: $rangeStart-$rangeEnd  contentLength=$contentLength")
-
-                    // Serve dari headCache jika range dalam 8 MB pertama
-                    val cacheSize = headCache?.size?.toLong() ?: 0L
-                    if (headCache != null && rangeStart < cacheSize && rangeEnd < cacheSize) {
-                        Log.d(TAG, "Serving from headCache")
-                        val isPartial = rangeHeader != null
-                        sendResponseHeaders(output,
-                            if (isPartial) 206 else 200,
-                            contentLength, rangeStart, rangeEnd, fileSize, isPartial)
-                        output.write(headCache,
-                            rangeStart.toInt(),
-                            (rangeEnd - rangeStart + 1).toInt())
-                        output.flush()
-                        return
-                    }
-
                     streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
                 }
             } catch (e: Exception) {
