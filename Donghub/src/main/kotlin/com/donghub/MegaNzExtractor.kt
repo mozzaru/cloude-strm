@@ -13,6 +13,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.nio.ByteBuffer
@@ -29,21 +30,23 @@ class MegaNzExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     companion object {
-        private const val TAG      = "MegaNzExtractor"
-        private const val MEGA_API = "https://g.api.mega.co.nz/cs"
+        private const val TAG           = "MegaNzExtractor"
+        private const val MEGA_API      = "https://g.api.mega.co.nz/cs"
+        private const val PREFETCH_SIZE = 8 * 1024 * 1024L   // 8 MB head
+        private const val TAIL_SIZE     = 4 * 1024 * 1024L   // 4 MB tail
 
         private val httpClient by lazy {
             OkHttpClient.Builder()
                 .followRedirects(true)
-                .callTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(120, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .build()
         }
 
         @Volatile private var activeProxy: MegaStreamProxy? = null
 
-        // ── Base64 ─────────────────────────────────────────────────────
+        // ── Base64 ──────────────────────────────────────────────────────
 
         fun megaB64Decode(s: String): ByteArray {
             val fixed = s.replace("-", "+").replace("_", "/")
@@ -51,7 +54,7 @@ class MegaNzExtractor : ExtractorApi() {
             return Base64.getDecoder().decode(fixed + "=".repeat(pad))
         }
 
-        // ── Key decode → Pair(aesKey, ctrIv) ──────────────────────────
+        // ── Key decode ──────────────────────────────────────────────────
 
         fun decodeFileKey(b64key: String): Pair<ByteArray, ByteArray> {
             val raw = megaB64Decode(b64key)
@@ -65,7 +68,7 @@ class MegaNzExtractor : ExtractorApi() {
             return Pair(aesKey, ctrIv)
         }
 
-        // ── Attrs decrypt ──────────────────────────────────────────────
+        // ── Attrs decrypt ────────────────────────────────────────────────
 
         fun decryptAttrs(encB64: String, aesKey: ByteArray): Map<String, String>? = try {
             val enc    = megaB64Decode(encB64)
@@ -84,7 +87,7 @@ class MegaNzExtractor : ExtractorApi() {
             null
         }
 
-        // ── IV increment ───────────────────────────────────────────────
+        // ── IV increment ─────────────────────────────────────────────────
 
         fun incrementIv(iv: ByteArray, delta: Long): ByteArray {
             val result = iv.copyOf()
@@ -97,9 +100,63 @@ class MegaNzExtractor : ExtractorApi() {
             }
             return result
         }
+
+        // ── FIX #1: Quality pakai nilai int langsung, bukan Qualities enum ──
+        // Log menunjukkan quality=400 → Qualities.P1080.value = 400 di CloudStream,
+        // tapi label "Mega 1080p" tidak muncul karena qualityLabel salah mapping.
+        // Solusi: pakai raw int yang sama dengan Qualities enum value CloudStream.
+
+        fun guessQuality(name: String, fileSize: Long = -1L): Int {
+            val s = name.lowercase()
+            return when {
+                "4k"   in s || "2160" in s -> Qualities.P2160.value
+                "1080" in s                -> Qualities.P1080.value
+                "720"  in s                -> Qualities.P720.value
+                "480"  in s                -> Qualities.P480.value
+                "360"  in s                -> Qualities.P360.value
+                // Fallback by file size — 796 MB → P1080 (Qualities.P1080.value = 400)
+                fileSize > 600_000_000L    -> Qualities.P1080.value
+                fileSize > 200_000_000L    -> Qualities.P720.value
+                fileSize > 80_000_000L     -> Qualities.P480.value
+                fileSize > 0               -> Qualities.P360.value
+                else                       -> Qualities.Unknown.value
+            }
+        }
+
+        // FIX: qualityLabel harus mapping dari Qualities.PXxx.value (bukan raw 1080/720/dll)
+        fun qualityLabel(quality: Int): String = when (quality) {
+            Qualities.P2160.value   -> "2160p"
+            Qualities.P1080.value   -> "1080p"   // 400 → "1080p"
+            Qualities.P720.value    -> "720p"
+            Qualities.P480.value    -> "480p"
+            Qualities.P360.value    -> "360p"
+            else                    -> "MP4"
+        }
+
+        // ── moov atom finder ─────────────────────────────────────────────
+
+        data class MoovInfo(val offset: Long, val size: Long)
+
+        fun findMoov(data: ByteArray): MoovInfo? {
+            var i = 0
+            while (i + 8 <= data.size) {
+                val size = ((data[i].toLong()   and 0xFF) shl 24) or
+                           ((data[i+1].toLong() and 0xFF) shl 16) or
+                           ((data[i+2].toLong() and 0xFF) shl 8)  or
+                            (data[i+3].toLong() and 0xFF)
+                val type = String(data, i + 4, 4, Charsets.US_ASCII)
+                if (type == "moov") {
+                    Log.i(TAG, "moov found at offset=$i size=$size")
+                    return MoovInfo(i.toLong(), size)
+                }
+                if (size < 8) break
+                i += size.toInt()
+            }
+            return null
+        }
     }
 
-    // ── URL helpers ────────────────────────────────────────────────────────
+    // ── URL helpers ──────────────────────────────────────────────────────────
 
     private fun normaliseUrl(url: String): String {
         var u = url.trim().replace("$mainUrl/embed/", "$mainUrl/file/")
@@ -116,7 +173,7 @@ class MegaNzExtractor : ExtractorApi() {
                else Pair(nodeId, fileKey)
     }
 
-    // ── Mega API ───────────────────────────────────────────────────────────
+    // ── Mega API ─────────────────────────────────────────────────────────────
 
     private suspend fun getFileInfo(nodeId: String): JsonObject? = try {
         Log.d(TAG, "Fetching file info for node: $nodeId")
@@ -143,21 +200,90 @@ class MegaNzExtractor : ExtractorApi() {
         null
     }
 
-    // ── Quality guesser ────────────────────────────────────────────────────
+    // ── FIX #2: Prefetch HEAD — decrypt 8 MB pertama untuk temukan moov ──────
+    // Log menunjukkan moov tidak dicari sama sekali → ExoPlayer seek-seek liar.
+    // Sekarang prefetchHead dipanggil sebelum proxy distart.
 
-    private fun guessQuality(name: String): Int {
-        val s = name.lowercase()
-        return when {
-            "4k"   in s || "2160" in s -> Qualities.P2160.value
-            "1080" in s                -> Qualities.P1080.value
-            "720"  in s                -> Qualities.P720.value
-            "480"  in s                -> Qualities.P480.value
-            "360"  in s                -> Qualities.P360.value
-            else                       -> Qualities.Unknown.value
-        }
+    private fun prefetchHead(
+        cdnUrl : String,
+        aesKey : ByteArray,
+        ctrIv  : ByteArray,
+        size   : Long
+    ): ByteArray {
+        val fetchSize = minOf(PREFETCH_SIZE, size)
+        Log.d(TAG, "Prefetch HEAD ${fetchSize / 1024} KB…")
+        val req = Request.Builder()
+            .url(cdnUrl)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
+            .header("Origin",  "https://mega.nz")
+            .header("Referer", "https://mega.nz/")
+            .header("Range",   "bytes=0-${fetchSize - 1}")
+            .build()
+        val resp   = httpClient.newCall(req).execute()
+        val body   = resp.body ?: return ByteArray(0)
+        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(ctrIv))
+        val out = ByteArrayOutputStream(fetchSize.toInt())
+        val buf = ByteArray(65536)
+        try {
+            val stream = body.byteStream()
+            while (true) {
+                val n = stream.read(buf); if (n <= 0) break
+                out.write(cipher.update(buf, 0, n) ?: continue)
+            }
+        } finally { body.close(); resp.close() }
+        val result = out.toByteArray()
+        Log.d(TAG, "Prefetch HEAD done: ${result.size / 1024} KB")
+        return result
     }
 
-    // ── getUrl ─────────────────────────────────────────────────────────────
+    // ── Prefetch TAIL — decrypt 4 MB terakhir jika moov tidak di head ────────
+
+    private fun prefetchTail(
+        cdnUrl   : String,
+        aesKey   : ByteArray,
+        ctrIv    : ByteArray,
+        fileSize : Long
+    ): Pair<ByteArray, Long> {
+        val tailSize    = minOf(TAIL_SIZE, fileSize)
+        val tailStart   = fileSize - tailSize
+        val blockStart  = tailStart / 16
+        val blockOffset = (tailStart % 16).toInt()
+        val cdnFrom     = blockStart * 16
+        val adjIv       = incrementIv(ctrIv, blockStart)
+        Log.d(TAG, "Prefetch TAIL ${tailSize / 1024} KB from offset $tailStart…")
+        val req = Request.Builder()
+            .url(cdnUrl)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
+            .header("Origin",  "https://mega.nz")
+            .header("Referer", "https://mega.nz/")
+            .header("Range",   "bytes=$cdnFrom-${fileSize - 1}")
+            .build()
+        val resp   = httpClient.newCall(req).execute()
+        val body   = resp.body ?: return Pair(ByteArray(0), tailStart)
+        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(adjIv))
+        val out  = ByteArrayOutputStream(tailSize.toInt())
+        val buf  = ByteArray(65536)
+        var skip = blockOffset
+        try {
+            val stream = body.byteStream()
+            while (true) {
+                val n = stream.read(buf); if (n <= 0) break
+                val dec = cipher.update(buf, 0, n) ?: continue
+                if (skip > 0) {
+                    val from = skip.coerceAtMost(dec.size)
+                    skip     = maxOf(0, skip - dec.size)
+                    if (from < dec.size) out.write(dec, from, dec.size - from)
+                } else out.write(dec)
+            }
+        } finally { body.close(); resp.close() }
+        val result = out.toByteArray()
+        Log.d(TAG, "Prefetch TAIL done: ${result.size / 1024} KB")
+        return Pair(result, tailStart)
+    }
+
+    // ── getUrl ────────────────────────────────────────────────────────────────
 
     override suspend fun getUrl(
         url: String,
@@ -168,67 +294,91 @@ class MegaNzExtractor : ExtractorApi() {
         Log.d(TAG, "getUrl called → $url")
 
         val (nodeId, fileKey) = parseUrl(url) ?: run {
-            Log.e(TAG, "Cannot parse Mega URL: $url")
-            return
+            Log.e(TAG, "Cannot parse Mega URL: $url"); return
         }
         Log.d(TAG, "Parsed → node=$nodeId  key=${fileKey.take(14)}…")
 
         val (aesKey, ctrIv) = try {
-            decodeFileKey(fileKey)
+            decodeFileKey(fileKey).also { Log.d(TAG, "AES key decoded OK") }
         } catch (e: Exception) {
-            Log.e(TAG, "decodeFileKey failed: ${e.message}")
-            return
+            Log.e(TAG, "decodeFileKey failed: ${e.message}"); return
         }
-        Log.d(TAG, "AES key decoded OK")
 
         val finfo = getFileInfo(nodeId)
         if (finfo == null) {
-            Log.w(TAG, "API failed → raw URL fallback")
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name   = name,
-                    url    = normaliseUrl(url),
-                    type   = ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = "$mainUrl/"
-                }
-            )
+            Log.w(TAG, "API failed → raw fallback")
+            callback.invoke(newExtractorLink(source = name, name = name,
+                url = normaliseUrl(url), type = ExtractorLinkType.VIDEO) {
+                this.quality = Qualities.Unknown.value
+                this.referer = "$mainUrl/"
+            })
             return
         }
 
-        val cdnUrl = finfo["g"]?.jsonPrimitive?.contentOrNull
-        if (cdnUrl.isNullOrBlank()) {
-            Log.e(TAG, "No CDN URL in API response")
-            return
+        val cdnUrl = finfo["g"]?.jsonPrimitive?.contentOrNull ?: run {
+            Log.e(TAG, "No CDN URL in response"); return
         }
-
         val encAt    = finfo["at"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val attrs    = if (encAt.isNotBlank()) decryptAttrs(encAt, aesKey) else null
         val fileName = attrs?.get("n").orEmpty().ifBlank { "video.mp4" }
         val fileSize = finfo["s"]?.jsonPrimitive?.longOrNull ?: -1L
         val ext      = fileName.substringAfterLast(".", "mp4").lowercase()
-        val quality  = guessQuality(fileName)
+        val quality  = guessQuality(fileName, fileSize)
+        val label    = qualityLabel(quality)
 
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$quality")
         Log.d(TAG, "CDN: ${cdnUrl.take(72)}…")
 
-        // Stop proxy lama
+        // ── FIX #2: Cari moov atom sebelum proxy distart ──────────────────
+        // Tanpa ini ExoPlayer akan seek berkali-kali seperti di log sebelumnya
+        var headCache      : ByteArray? = null
+        var moovFileOffset : Long       = -1L
+
+        if (fileSize > 0) {
+            val head   = prefetchHead(cdnUrl, aesKey, ctrIv, fileSize)
+            headCache  = head
+            val moovInHead = findMoov(head)
+
+            if (moovInHead != null) {
+                moovFileOffset = moovInHead.offset
+                Log.i(TAG, "moov in HEAD at offset=$moovFileOffset ✅ fast-start OK")
+            } else {
+                Log.w(TAG, "moov NOT in head → checking tail…")
+                val (tail, tailStart) = prefetchTail(cdnUrl, aesKey, ctrIv, fileSize)
+                val moovInTail = findMoov(tail)
+                if (moovInTail != null) {
+                    moovFileOffset = tailStart + moovInTail.offset
+                    Log.i(TAG, "moov in TAIL at fileOffset=$moovFileOffset — ExoPlayer will seek once")
+                } else {
+                    Log.w(TAG, "moov not found anywhere — streaming as-is")
+                }
+            }
+        }
+
+        // Stop proxy lama sebelum buat yang baru
         activeProxy?.stop()
         Log.d(TAG, "Old proxy stopped")
 
-        val proxy = MegaStreamProxy(cdnUrl, aesKey, ctrIv, fileSize, ext)
-        val port  = proxy.start()
+        val proxy = MegaStreamProxy(
+            cdnUrl         = cdnUrl,
+            aesKey         = aesKey,
+            ctrIv          = ctrIv,
+            fileSize       = fileSize,
+            ext            = ext,
+            headCache      = headCache,
+            moovFileOffset = moovFileOffset
+        )
+        val port    = proxy.start()
         activeProxy = proxy
+        Log.i(TAG, "Proxy started on port $port → http://127.0.0.1:$port/video.$ext")
 
         val playUrl = "http://127.0.0.1:$port/video.$ext"
-        Log.i(TAG, "Proxy started on port $port → $playUrl")
 
+        // FIX #1: name = "Mega 1080p" / "Mega 720p" dll sesuai label
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = "$name · $fileName",
+                name   = "Mega $label",
                 url    = playUrl,
                 type   = ExtractorLinkType.VIDEO
             ) {
@@ -236,27 +386,29 @@ class MegaNzExtractor : ExtractorApi() {
                 this.referer = ""
             }
         )
-
         Log.i(TAG, "ExtractorLink delivered to callback ✅")
     }
 
-    // ── Local Decrypt Proxy ────────────────────────────────────────────────
+    // ── Local Decrypt Proxy ──────────────────────────────────────────────────
 
     private inner class MegaStreamProxy(
-        private val cdnUrl   : String,
-        private val aesKey   : ByteArray,
-        private val ctrIv    : ByteArray,
-        private val fileSize : Long,
-        private val ext      : String
+        private val cdnUrl         : String,
+        private val aesKey         : ByteArray,
+        private val ctrIv          : ByteArray,
+        private val fileSize       : Long,
+        private val ext            : String,
+        private val headCache      : ByteArray?,
+        private val moovFileOffset : Long
     ) {
-        private var serverSocket: ServerSocket? = null
-        private val executor = Executors.newCachedThreadPool()
+        private var serverSocket : ServerSocket? = null
+        private val executor     = Executors.newCachedThreadPool()
         @Volatile private var running = true
 
         fun start(): Int {
             val ss = ServerSocket(0)
             serverSocket = ss
             executor.submit { acceptLoop(ss) }
+            Log.d(TAG, "Proxy accept loop started on port ${ss.localPort}")
             return ss.localPort
         }
 
@@ -268,7 +420,6 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun acceptLoop(ss: ServerSocket) {
-            Log.d(TAG, "Proxy accept loop started on port ${ss.localPort}")
             while (running) {
                 try {
                     val client = ss.accept()
@@ -276,12 +427,11 @@ class MegaNzExtractor : ExtractorApi() {
                     executor.submit { handleClient(client) }
                 } catch (_: Exception) { break }
             }
-            Log.d(TAG, "Proxy accept loop ended")
         }
 
         private fun handleClient(client: java.net.Socket) {
             try {
-                client.soTimeout = 60_000
+                client.soTimeout = 120_000
                 client.use { sock ->
                     val reader = sock.getInputStream().bufferedReader(Charsets.US_ASCII)
                     val output = sock.getOutputStream()
@@ -301,15 +451,11 @@ class MegaNzExtractor : ExtractorApi() {
 
                     val method = requestLine.substringBefore(" ").uppercase()
                     if (method == "HEAD") {
-                        Log.d(TAG, "HEAD request → sending headers only")
                         sendResponseHeaders(output, 200, fileSize,
-                                            0L, if (fileSize > 0) fileSize - 1 else 0L,
-                                            fileSize, false)
-                        output.flush()
+                            0L, if (fileSize > 0) fileSize - 1 else 0L, fileSize, false)
                         return
                     }
 
-                    // Parse Range
                     val rangeHeader            = headers["range"]
                     val (rangeStart, rangeEnd) = parseRange(rangeHeader, fileSize)
                     val contentLength          = if (fileSize > 0 && rangeEnd >= 0)
@@ -317,104 +463,124 @@ class MegaNzExtractor : ExtractorApi() {
 
                     Log.d(TAG, "Range: $rangeStart-$rangeEnd  contentLength=$contentLength")
 
-                    // AES-CTR block alignment
-                    val blockStart   = rangeStart / 16
-                    val blockOffset  = (rangeStart % 16).toInt()
-                    val cdnFrom      = blockStart * 16
-                    val adjustedIv   = incrementIv(ctrIv, blockStart)
-
-                    Log.d(TAG, "AES seek → block=$blockStart  skip=$blockOffset  cdnFrom=$cdnFrom")
-
-                    val cdnRangeHdr = if (fileSize > 0) "bytes=$cdnFrom-${fileSize - 1}"
-                                      else              "bytes=$cdnFrom-"
-
-                    val cdnReq = Request.Builder()
-                        .url(cdnUrl)
-                        .header("User-Agent",
-                            "Mozilla/5.0 (Linux; Android 10; K) " +
-                            "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                            "Chrome/124.0.0.0 Mobile Safari/537.36")
-                        .header("Origin",  "https://mega.nz")
-                        .header("Referer", "https://mega.nz/")
-                        .header("Range",   cdnRangeHdr)
-                        .build()
-
-                    Log.d(TAG, "CDN request → Range: $cdnRangeHdr")
-
-                    val cdnResp = httpClient.newCall(cdnReq).execute()
-                    Log.d(TAG, "CDN response: ${cdnResp.code}")
-
-                    val body = cdnResp.body ?: run {
-                        Log.e(TAG, "CDN returned empty body (${cdnResp.code})")
-                        sendError(output, 502); return
-                    }
-
-                    val isPartial = rangeHeader != null
-                    sendResponseHeaders(output,
-                        if (isPartial) 206 else 200,
-                        contentLength, rangeStart, rangeEnd, fileSize, isPartial)
-
-                    // Stream + decrypt
-                    val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-                    cipher.init(Cipher.DECRYPT_MODE,
-                                SecretKeySpec(aesKey, "AES"),
-                                IvParameterSpec(adjustedIv))
-
-                    val encStream = body.byteStream()
-                    val buf       = ByteArray(65536)
-                    var toSkip    = blockOffset
-                    var remaining = contentLength
-                    var totalSent = 0L
-
-                    try {
-                        while (remaining != 0L) {
-                            val want = when {
-                                remaining > 0 -> minOf(buf.size.toLong(), remaining + toSkip).toInt()
-                                else          -> buf.size
-                            }
-                            val n = encStream.read(buf, 0, want)
-                            if (n <= 0) break
-
-                            val dec = cipher.update(buf, 0, n) ?: continue
-
-                            val writeData: ByteArray
-                            if (toSkip > 0) {
-                                val from = toSkip.coerceAtMost(dec.size)
-                                toSkip   = maxOf(0, toSkip - dec.size)
-                                writeData = if (from < dec.size) dec.copyOfRange(from, dec.size)
-                                            else ByteArray(0)
-                            } else {
-                                writeData = dec
-                            }
-                            if (writeData.isEmpty()) continue
-
-                            val toWrite = if (remaining > 0)
-                                writeData.copyOf(minOf(writeData.size.toLong(), remaining).toInt())
-                            else writeData
-
-                            output.write(toWrite)
-                            totalSent += toWrite.size
-                            if (remaining > 0) remaining -= toWrite.size
-                        }
+                    // Serve dari headCache jika range penuh dalam 8 MB pertama
+                    val cacheSize = headCache?.size?.toLong() ?: 0L
+                    if (headCache != null && rangeStart < cacheSize && rangeEnd < cacheSize) {
+                        Log.d(TAG, "Serving from headCache")
+                        val isPartial = rangeHeader != null
+                        sendResponseHeaders(output,
+                            if (isPartial) 206 else 200,
+                            contentLength, rangeStart, rangeEnd, fileSize, isPartial)
+                        output.write(headCache,
+                            rangeStart.toInt(),
+                            (rangeEnd - rangeStart + 1).toInt())
                         output.flush()
-                        Log.d(TAG, "Stream done — sent ${totalSent / 1024} KB")
-                    } catch (_: java.io.IOException) {
-                        Log.d(TAG, "Client disconnected (seek/close) after ${totalSent / 1024} KB")
-                    } finally {
-                        body.close()
-                        cdnResp.close()
+                        return
                     }
+
+                    // Stream dari CDN dengan decrypt AES-CTR
+                    streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "handleClient error: ${e.message}")
             }
         }
 
-        // ── Helpers ────────────────────────────────────────────────────
+        private fun streamFromCdn(
+            output        : OutputStream,
+            rangeHeader   : String?,
+            rangeStart    : Long,
+            rangeEnd      : Long,
+            contentLength : Long
+        ) {
+            val blockStart  = rangeStart / 16
+            val blockOffset = (rangeStart % 16).toInt()
+            val cdnFrom     = blockStart * 16
+            val adjustedIv  = incrementIv(ctrIv, blockStart)
+            val cdnRangeHdr = if (fileSize > 0) "bytes=$cdnFrom-${fileSize - 1}"
+                              else              "bytes=$cdnFrom-"
+
+            Log.d(TAG, "AES seek → block=$blockStart  skip=$blockOffset  cdnFrom=$cdnFrom")
+
+            val cdnReq = Request.Builder()
+                .url(cdnUrl)
+                .header("User-Agent",
+                    "Mozilla/5.0 (Linux; Android 10; K) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/124.0.0.0 Mobile Safari/537.36")
+                .header("Origin",  "https://mega.nz")
+                .header("Referer", "https://mega.nz/")
+                .header("Range",   cdnRangeHdr)
+                .build()
+
+            Log.d(TAG, "CDN request → Range: $cdnRangeHdr")
+            val cdnResp = httpClient.newCall(cdnReq).execute()
+            Log.d(TAG, "CDN response: ${cdnResp.code}")
+
+            val body = cdnResp.body ?: run {
+                sendError(output, 502); return
+            }
+
+            val isPartial = rangeHeader != null
+            sendResponseHeaders(output,
+                if (isPartial) 206 else 200,
+                contentLength, rangeStart, rangeEnd, fileSize, isPartial)
+
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE,
+                        SecretKeySpec(aesKey, "AES"),
+                        IvParameterSpec(adjustedIv))
+
+            val encStream = body.byteStream()
+            val buf       = ByteArray(65536)
+            var toSkip    = blockOffset
+            var remaining = contentLength
+            var totalSent = 0L
+
+            try {
+                while (remaining != 0L) {
+                    val want = when {
+                        remaining > 0 -> minOf(buf.size.toLong(), remaining + toSkip).toInt()
+                        else          -> buf.size
+                    }
+                    val n = encStream.read(buf, 0, want)
+                    if (n <= 0) break
+
+                    val dec = cipher.update(buf, 0, n) ?: continue
+
+                    val writeData: ByteArray
+                    if (toSkip > 0) {
+                        val from  = toSkip.coerceAtMost(dec.size)
+                        toSkip    = maxOf(0, toSkip - dec.size)
+                        writeData = if (from < dec.size) dec.copyOfRange(from, dec.size)
+                                    else ByteArray(0)
+                    } else {
+                        writeData = dec
+                    }
+                    if (writeData.isEmpty()) continue
+
+                    val toWrite = if (remaining > 0)
+                        writeData.copyOf(minOf(writeData.size.toLong(), remaining).toInt())
+                    else writeData
+
+                    output.write(toWrite)
+                    totalSent += toWrite.size
+                    if (remaining > 0) remaining -= toWrite.size
+                }
+                output.flush()
+                Log.d(TAG, "Stream done — sent ${totalSent / 1024} KB")
+            } catch (_: java.io.IOException) {
+                Log.d(TAG, "Client disconnected (seek/close) after ${totalSent / 1024} KB")
+            } finally {
+                body.close()
+                cdnResp.close()
+            }
+        }
+
+        // ── Helpers ──────────────────────────────────────────────────────
 
         private fun parseRange(header: String?, size: Long): Pair<Long, Long> {
-            if (header == null)
-                return Pair(0L, if (size > 0) size - 1 else -1L)
+            if (header == null) return Pair(0L, if (size > 0) size - 1 else -1L)
             val m = Regex("""bytes=(\d*)-(\d*)""").find(header)
                 ?: return Pair(0L, if (size > 0) size - 1 else -1L)
             val s = m.groupValues[1].toLongOrNull() ?: 0L
@@ -423,13 +589,8 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun sendResponseHeaders(
-            out           : OutputStream,
-            statusCode    : Int,
-            contentLength : Long,
-            rangeStart    : Long,
-            rangeEnd      : Long,
-            total         : Long,
-            isPartial     : Boolean
+            out: OutputStream, statusCode: Int, contentLength: Long,
+            rangeStart: Long, rangeEnd: Long, total: Long, isPartial: Boolean
         ) {
             val mime   = if (ext == "mkv") "video/x-matroska" else "video/mp4"
             val status = if (statusCode == 206) "206 Partial Content" else "200 OK"
@@ -438,8 +599,7 @@ class MegaNzExtractor : ExtractorApi() {
             sb.append("Content-Type: $mime\r\n")
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Connection: keep-alive\r\n")
-            if (contentLength > 0)
-                sb.append("Content-Length: $contentLength\r\n")
+            if (contentLength > 0) sb.append("Content-Length: $contentLength\r\n")
             if (isPartial && total > 0)
                 sb.append("Content-Range: bytes $rangeStart-$rangeEnd/$total\r\n")
             sb.append("\r\n")
@@ -448,10 +608,8 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun sendError(out: OutputStream, code: Int) {
-            out.write(
-                "HTTP/1.1 $code Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    .toByteArray(Charsets.US_ASCII)
-            )
+            out.write("HTTP/1.1 $code Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .toByteArray(Charsets.US_ASCII))
             out.flush()
         }
     }
