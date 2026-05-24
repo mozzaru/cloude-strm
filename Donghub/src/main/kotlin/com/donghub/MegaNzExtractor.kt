@@ -1,13 +1,8 @@
 package com.donghub
 
 import com.lagradost.api.Log
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -220,7 +215,7 @@ class MegaNzExtractor : ExtractorApi() {
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = "Mega $label",
+                name   = label,
                 url    = playUrl,
                 type   = ExtractorLinkType.VIDEO
             ) {
@@ -239,7 +234,7 @@ class MegaNzExtractor : ExtractorApi() {
         private val ext      : String
     ) {
         private var serverSocket : ServerSocket? = null
-        private val executor     = Executors.newCachedThreadPool()
+        private val executor     = Executors.newFixedThreadPool(8)
         @Volatile private var running = true
 
         fun start(): Int {
