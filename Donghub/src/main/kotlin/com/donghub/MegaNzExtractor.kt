@@ -32,8 +32,8 @@ class MegaNzExtractor : ExtractorApi() {
     companion object {
         private const val TAG           = "MegaNzExtractor"
         private const val MEGA_API      = "https://g.api.mega.co.nz/cs"
-        private const val PREFETCH_SIZE = 8 * 1024 * 1024L   // 8 MB head
-        private const val TAIL_SIZE     = 4 * 1024 * 1024L   // 4 MB tail
+        private const val PREFETCH_SIZE = 8 * 1024 * 1024L
+        private const val TAIL_SIZE     = 4 * 1024 * 1024L
 
         private val httpClient by lazy {
             OkHttpClient.Builder()
@@ -46,15 +46,11 @@ class MegaNzExtractor : ExtractorApi() {
 
         @Volatile private var activeProxy: MegaStreamProxy? = null
 
-        // ── Base64 ──────────────────────────────────────────────────────
-
         fun megaB64Decode(s: String): ByteArray {
             val fixed = s.replace("-", "+").replace("_", "/")
             val pad   = (4 - fixed.length % 4) % 4
             return Base64.getDecoder().decode(fixed + "=".repeat(pad))
         }
-
-        // ── Key decode ──────────────────────────────────────────────────
 
         fun decodeFileKey(b64key: String): Pair<ByteArray, ByteArray> {
             val raw = megaB64Decode(b64key)
@@ -67,8 +63,6 @@ class MegaNzExtractor : ExtractorApi() {
             val ctrIv  = pack(k[4], k[5], 0, 0)
             return Pair(aesKey, ctrIv)
         }
-
-        // ── Attrs decrypt ────────────────────────────────────────────────
 
         fun decryptAttrs(encB64: String, aesKey: ByteArray): Map<String, String>? = try {
             val enc    = megaB64Decode(encB64)
@@ -87,8 +81,6 @@ class MegaNzExtractor : ExtractorApi() {
             null
         }
 
-        // ── IV increment ─────────────────────────────────────────────────
-
         fun incrementIv(iv: ByteArray, delta: Long): ByteArray {
             val result = iv.copyOf()
             var carry  = delta
@@ -101,11 +93,6 @@ class MegaNzExtractor : ExtractorApi() {
             return result
         }
 
-        // ── FIX #1: Quality pakai nilai int langsung, bukan Qualities enum ──
-        // Log menunjukkan quality=400 → Qualities.P1080.value = 400 di CloudStream,
-        // tapi label "Mega 1080p" tidak muncul karena qualityLabel salah mapping.
-        // Solusi: pakai raw int yang sama dengan Qualities enum value CloudStream.
-
         fun guessQuality(name: String, fileSize: Long = -1L): Int {
             val s = name.lowercase()
             return when {
@@ -114,7 +101,6 @@ class MegaNzExtractor : ExtractorApi() {
                 "720"  in s                -> Qualities.P720.value
                 "480"  in s                -> Qualities.P480.value
                 "360"  in s                -> Qualities.P360.value
-                // Fallback by file size — 796 MB → P1080 (Qualities.P1080.value = 400)
                 fileSize > 600_000_000L    -> Qualities.P1080.value
                 fileSize > 200_000_000L    -> Qualities.P720.value
                 fileSize > 80_000_000L     -> Qualities.P480.value
@@ -123,17 +109,14 @@ class MegaNzExtractor : ExtractorApi() {
             }
         }
 
-        // FIX: qualityLabel harus mapping dari Qualities.PXxx.value (bukan raw 1080/720/dll)
         fun qualityLabel(quality: Int): String = when (quality) {
-            Qualities.P2160.value   -> "2160p"
-            Qualities.P1080.value   -> "1080p"   // 400 → "1080p"
-            Qualities.P720.value    -> "720p"
-            Qualities.P480.value    -> "480p"
-            Qualities.P360.value    -> "360p"
-            else                    -> "MP4"
+            Qualities.P2160.value -> "2160p"
+            Qualities.P1080.value -> "1080p"
+            Qualities.P720.value  -> "720p"
+            Qualities.P480.value  -> "480p"
+            Qualities.P360.value  -> "360p"
+            else                  -> "MP4"
         }
-
-        // ── moov atom finder ─────────────────────────────────────────────
 
         data class MoovInfo(val offset: Long, val size: Long)
 
@@ -156,8 +139,6 @@ class MegaNzExtractor : ExtractorApi() {
         }
     }
 
-    // ── URL helpers ──────────────────────────────────────────────────────────
-
     private fun normaliseUrl(url: String): String {
         var u = url.trim().replace("$mainUrl/embed/", "$mainUrl/file/")
         u = u.replace(Regex("""/#!([^!]+)!(.+)"""), "/file/$1#$2")
@@ -172,8 +153,6 @@ class MegaNzExtractor : ExtractorApi() {
         return if (nodeId.isBlank() || fileKey.isBlank()) null
                else Pair(nodeId, fileKey)
     }
-
-    // ── Mega API ─────────────────────────────────────────────────────────────
 
     private suspend fun getFileInfo(nodeId: String): JsonObject? = try {
         Log.d(TAG, "Fetching file info for node: $nodeId")
@@ -200,10 +179,7 @@ class MegaNzExtractor : ExtractorApi() {
         null
     }
 
-    // ── FIX #2: Prefetch HEAD — decrypt 8 MB pertama untuk temukan moov ──────
-    // Log menunjukkan moov tidak dicari sama sekali → ExoPlayer seek-seek liar.
-    // Sekarang prefetchHead dipanggil sebelum proxy distart.
-
+    // Prefetch HEAD only — cepat, 8 MB pertama
     private fun prefetchHead(
         cdnUrl : String,
         aesKey : ByteArray,
@@ -237,54 +213,6 @@ class MegaNzExtractor : ExtractorApi() {
         return result
     }
 
-    // ── Prefetch TAIL — decrypt 4 MB terakhir jika moov tidak di head ────────
-
-    private fun prefetchTail(
-        cdnUrl   : String,
-        aesKey   : ByteArray,
-        ctrIv    : ByteArray,
-        fileSize : Long
-    ): Pair<ByteArray, Long> {
-        val tailSize    = minOf(TAIL_SIZE, fileSize)
-        val tailStart   = fileSize - tailSize
-        val blockStart  = tailStart / 16
-        val blockOffset = (tailStart % 16).toInt()
-        val cdnFrom     = blockStart * 16
-        val adjIv       = incrementIv(ctrIv, blockStart)
-        Log.d(TAG, "Prefetch TAIL ${tailSize / 1024} KB from offset $tailStart…")
-        val req = Request.Builder()
-            .url(cdnUrl)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36")
-            .header("Origin",  "https://mega.nz")
-            .header("Referer", "https://mega.nz/")
-            .header("Range",   "bytes=$cdnFrom-${fileSize - 1}")
-            .build()
-        val resp   = httpClient.newCall(req).execute()
-        val body   = resp.body ?: return Pair(ByteArray(0), tailStart)
-        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, "AES"), IvParameterSpec(adjIv))
-        val out  = ByteArrayOutputStream(tailSize.toInt())
-        val buf  = ByteArray(65536)
-        var skip = blockOffset
-        try {
-            val stream = body.byteStream()
-            while (true) {
-                val n = stream.read(buf); if (n <= 0) break
-                val dec = cipher.update(buf, 0, n) ?: continue
-                if (skip > 0) {
-                    val from = skip.coerceAtMost(dec.size)
-                    skip     = maxOf(0, skip - dec.size)
-                    if (from < dec.size) out.write(dec, from, dec.size - from)
-                } else out.write(dec)
-            }
-        } finally { body.close(); resp.close() }
-        val result = out.toByteArray()
-        Log.d(TAG, "Prefetch TAIL done: ${result.size / 1024} KB")
-        return Pair(result, tailStart)
-    }
-
-    // ── getUrl ────────────────────────────────────────────────────────────────
-
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -315,7 +243,7 @@ class MegaNzExtractor : ExtractorApi() {
             return
         }
 
-        val cdnUrl = finfo["g"]?.jsonPrimitive?.contentOrNull ?: run {
+        val cdnUrl   = finfo["g"]?.jsonPrimitive?.contentOrNull ?: run {
             Log.e(TAG, "No CDN URL in response"); return
         }
         val encAt    = finfo["at"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -329,33 +257,25 @@ class MegaNzExtractor : ExtractorApi() {
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$quality")
         Log.d(TAG, "CDN: ${cdnUrl.take(72)}…")
 
-        // ── FIX #2: Cari moov atom sebelum proxy distart ──────────────────
-        // Tanpa ini ExoPlayer akan seek berkali-kali seperti di log sebelumnya
+        // Prefetch HEAD saja (cepat ~20 detik), tail dilakukan async di proxy
+        // Ini mencegah getUrl hang terlalu lama sebelum callback dipanggil
         var headCache      : ByteArray? = null
         var moovFileOffset : Long       = -1L
 
         if (fileSize > 0) {
-            val head   = prefetchHead(cdnUrl, aesKey, ctrIv, fileSize)
-            headCache  = head
+            val head = prefetchHead(cdnUrl, aesKey, ctrIv, fileSize)
+            headCache = head
             val moovInHead = findMoov(head)
-
             if (moovInHead != null) {
                 moovFileOffset = moovInHead.offset
                 Log.i(TAG, "moov in HEAD at offset=$moovFileOffset ✅ fast-start OK")
             } else {
-                Log.w(TAG, "moov NOT in head → checking tail…")
-                val (tail, tailStart) = prefetchTail(cdnUrl, aesKey, ctrIv, fileSize)
-                val moovInTail = findMoov(tail)
-                if (moovInTail != null) {
-                    moovFileOffset = tailStart + moovInTail.offset
-                    Log.i(TAG, "moov in TAIL at fileOffset=$moovFileOffset — ExoPlayer will seek once")
-                } else {
-                    Log.w(TAG, "moov not found anywhere — streaming as-is")
-                }
+                // moov di tail — proxy akan cari async saat ExoPlayer request tail
+                Log.w(TAG, "moov NOT in head — proxy will serve tail on-demand")
+                moovFileOffset = -1L
             }
         }
 
-        // Stop proxy lama sebelum buat yang baru
         activeProxy?.stop()
         Log.d(TAG, "Old proxy stopped")
 
@@ -374,7 +294,6 @@ class MegaNzExtractor : ExtractorApi() {
 
         val playUrl = "http://127.0.0.1:$port/video.$ext"
 
-        // FIX #1: name = "Mega 1080p" / "Mega 720p" dll sesuai label
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -388,8 +307,6 @@ class MegaNzExtractor : ExtractorApi() {
         )
         Log.i(TAG, "ExtractorLink delivered to callback ✅")
     }
-
-    // ── Local Decrypt Proxy ──────────────────────────────────────────────────
 
     private inner class MegaStreamProxy(
         private val cdnUrl         : String,
@@ -463,7 +380,7 @@ class MegaNzExtractor : ExtractorApi() {
 
                     Log.d(TAG, "Range: $rangeStart-$rangeEnd  contentLength=$contentLength")
 
-                    // Serve dari headCache jika range penuh dalam 8 MB pertama
+                    // Serve dari headCache jika range dalam 8 MB pertama
                     val cacheSize = headCache?.size?.toLong() ?: 0L
                     if (headCache != null && rangeStart < cacheSize && rangeEnd < cacheSize) {
                         Log.d(TAG, "Serving from headCache")
@@ -478,7 +395,6 @@ class MegaNzExtractor : ExtractorApi() {
                         return
                     }
 
-                    // Stream dari CDN dengan decrypt AES-CTR
                     streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
                 }
             } catch (e: Exception) {
@@ -576,8 +492,6 @@ class MegaNzExtractor : ExtractorApi() {
                 cdnResp.close()
             }
         }
-
-        // ── Helpers ──────────────────────────────────────────────────────
 
         private fun parseRange(header: String?, size: Long): Pair<Long, Long> {
             if (header == null) return Pair(0L, if (size > 0) size - 1 else -1L)
