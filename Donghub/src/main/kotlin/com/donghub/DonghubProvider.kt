@@ -10,5 +10,6 @@ class DonghubProvider: Plugin() {
         registerExtractorAPI(InternetArchive())
         registerExtractorAPI(DtubeExtractor())
         registerExtractorAPI(RpmvidExtractor())
+        registerExtractorAPI(MegaNzExtractor())
     }
 }
