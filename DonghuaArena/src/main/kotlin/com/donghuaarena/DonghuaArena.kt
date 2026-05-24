@@ -57,9 +57,11 @@ class DonghuaArena : MainAPI() {
         private const val GENRE_TTL_MS = 15 * 60 * 1000L
 
         val NO_CACHE = mapOf(
-            "Cache-Control" to "no-cache, no-store, must-revalidate",
-            "Pragma"        to "no-cache",
-            "Expires"       to "0"
+            "Cache-Control"     to "no-cache, no-store, must-revalidate",
+            "Pragma"            to "no-cache",
+            "Expires"           to "0",
+            "If-None-Match"     to "",
+            "If-Modified-Since" to "0"
         )
 
         fun noCacheUrl(url: String): String {
@@ -71,29 +73,13 @@ class DonghuaArena : MainAPI() {
             if (posterUrl.isNullOrBlank()) return null
 
             val directUrl = if (posterUrl.contains("wsrv.nl")) {
-                try {
-                    val urlParam = posterUrl
-                        .substringAfter("wsrv.nl/?url=")
-                        .substringBefore("&")
-                    if (urlParam.isNotBlank())
-                        java.net.URLDecoder.decode(urlParam, "UTF-8")
-                    else posterUrl
-                } catch (e: Exception) {
-                    posterUrl
-                }
-            } else {
                 posterUrl
+            } else {
+                val encoded = java.net.URLEncoder.encode(posterUrl, "UTF-8")
+                "https://wsrv.nl/?url=$encoded&output=webp&q=40&il=1&sharp=1&w=300&h=400&fit=cover"
             }
 
-            val version = (lastUpdate ?: updatedAt)
-                ?.replace(Regex("[^0-9]"), "")
-                ?.take(12)
-                ?.trimStart('0')
-
-            return if (!version.isNullOrBlank()) {
-                val sep = if (directUrl.contains("?")) "&" else "?"
-                "$directUrl${sep}_v=$version"
-            } else directUrl
+            return directUrl
         }
     }
 
