@@ -202,11 +202,20 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val seriesUrl = if (episodeUrlRegex.containsMatchIn(url)) {
-            episodeUrlToSeriesUrl(url) ?: url
-        } else url
+        val firstDoc = app.get(url, headers = baseHeaders).document
 
-        val document = app.get(seriesUrl, headers = baseHeaders).document
+        val allEpsLink = firstDoc.selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
+
+        val seriesUrl: String
+        val document: org.jsoup.nodes.Document
+
+        if (allEpsLink != null) {
+            seriesUrl = fixUrl(allEpsLink)
+            document  = app.get(seriesUrl, headers = baseHeaders).document
+        } else {
+            seriesUrl = url
+            document  = firstDoc
+        }
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
@@ -215,7 +224,6 @@ class Donghub : MainAPI() {
             poster = document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
         }
 
-        //Deskripsi / Sinopsis
         val synopsis = run {
             val synpEl = document.selectFirst("div.bixbox.synp div.entry-content")
             synpEl?.selectFirst("h1")?.remove()
@@ -234,36 +242,30 @@ class Donghub : MainAPI() {
             }
         }
 
-        // Genre
         val genres = document.select("div.genxed a").map { it.text().trim() }
-
-        // Status
+    
         val statusRaw = document.select("div.spe span")
             .firstOrNull { it.text().startsWith("Status:") }
             ?.text()?.removePrefix("Status:")?.trim().orEmpty()
-
+    
         val showStatus = when (statusRaw.lowercase()) {
             "ongoing"   -> ShowStatus.Ongoing
             "completed" -> ShowStatus.Completed
             else        -> null
         }
 
-        // Episode list
         val episodeList = document.select("div.eplister ul li")
         val isSeries    = episodeList.isNotEmpty()
         val tvType      = if (isSeries) TvType.Anime else TvType.Movie
-
+    
         val episodes = if (isSeries) {
             episodeList.mapNotNull { li ->
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
-
-                val epNum = li.selectFirst("div.epl-num")?.text()?.trim()
+                val epNum  = li.selectFirst("div.epl-num")?.text()?.trim()
                     ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-
                 val rawEpTitle = li.selectFirst("div.epl-title")?.text()?.trim().orEmpty()
                 val cleanTitle = cleanEpisodeTitle(rawEpTitle, title, epNum)
-
                 newEpisode(epHref) {
                     this.name      = cleanTitle
                     this.episode   = epNum
@@ -274,7 +276,6 @@ class Donghub : MainAPI() {
             val firstOption = document.selectFirst(".mobius option")
             val base64      = firstOption?.attr("value")?.trim()
             var playUrl: String? = null
-
             if (!base64.isNullOrBlank()) {
                 try {
                     val decoded = base64Decode(base64)
@@ -285,13 +286,8 @@ class Donghub : MainAPI() {
                     }
                 } catch (_: Exception) {}
             }
-
             if (playUrl == null) playUrl = seriesUrl
-
-            listOf(newEpisode(playUrl) {
-                name       = "Movie"
-                posterUrl  = poster
-            })
+            listOf(newEpisode(playUrl) { name = "Movie"; posterUrl = poster })
         }
 
         return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
