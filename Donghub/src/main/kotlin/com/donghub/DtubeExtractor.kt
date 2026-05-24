@@ -16,12 +16,11 @@ open class DtubeExtractor : ExtractorApi() {
         val rad = BigInteger.valueOf(58)
         for (char in base58) {
             val index = alphabet.indexOf(char)
-            if (index == -1) return base58 // Not base58 or already UUID
+            if (index == -1) return ""
             n = n.multiply(rad).add(BigInteger.valueOf(index.toLong()))
         }
-
         val hex = n.toString(16).padStart(32, '0')
-        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}"
+        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}"
     }
 
     private fun isUuid(id: String): Boolean {
@@ -34,31 +33,35 @@ open class DtubeExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val rawId = if (url.contains("?v=")) {
-            url.substringAfter("?v=").substringBefore("&")
-        } else {
-            url.substringAfterLast("/")
+        val rawId = when {
+            url.contains("?v=") -> url.substringAfter("?v=").substringBefore("&")
+            else -> url.substringAfterLast("/").substringBefore("?")
         }
 
         if (rawId.isBlank()) return
 
         val videoId = if (isUuid(rawId)) rawId else base58ToUuid(rawId)
 
-        if (videoId.isNotEmpty()) {
-            // Try nas1 and nas2 if needed, but nas1 is standard
-            val videoUrl = "https://nas1.d.tube/videos/$videoId/master.m3u8"
+        if (videoId.isBlank()) return
 
+        val cdnList = listOf(
+            "https://nas1.d.tube/videos/$videoId/master.m3u8",
+            "https://nas2.d.tube/videos/$videoId/master.m3u8",
+        )
+
+        for (videoUrl in cdnList) {
             callback(
                 newExtractorLink(
                     source = name,
-                    name = "$name (Auto)",
+                    name = name,
                     url = videoUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.quality = Qualities.Unknown.value
-                    this.referer = url
+                    this.referer = "$mainUrl/"
                 }
             )
         }
     }
 }
+
