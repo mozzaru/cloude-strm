@@ -312,17 +312,24 @@ class Donghub : MainAPI() {
 
             try {
                 val decoded   = base64Decode(base64)
-                val iframe    = Jsoup.parse(decoded).selectFirst("iframe")
-                val iframeSrc = iframe?.attr("src")
-                    ?.ifBlank { iframe.attr("data-src") }?.trim()
+                val iframe    = Jsoup.parse(decoded).selectFirst("iframe") ?: return@forEach
+                val iframeSrc = (iframe.attr("src")
+                    .ifBlank { iframe.attr("data-src") }).trim()
+                if (iframeSrc.isBlank()) return@forEach
 
-                if (!iframeSrc.isNullOrBlank()) {
-                    val finalUrl = if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
-                    println("🎯 [Donghub] Extracting: $finalUrl")
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+                val finalUrl = when {
+                    iframeSrc.startsWith("http") -> iframeSrc
+                    iframeSrc.startsWith("//")   -> "https:$iframeSrc"
+                    else                         -> return@forEach
                 }
+
+                val serverLabel = server.text().trim().lowercase()
+                println("🎯 [Donghub] server='$serverLabel'  url=$finalUrl")
+
+                loadExtractor(finalUrl, data, subtitleCallback, callback)
+    
             } catch (e: Exception) {
-                println("❌ [Donghub] Error: ${e.message}")
+                println("❌ [Donghub] Error parsing server option: ${e.message}")
             }
         }
 
