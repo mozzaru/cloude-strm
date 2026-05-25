@@ -1,5 +1,6 @@
 package com.donghub
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
@@ -304,32 +305,52 @@ class Donghub : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = baseHeaders).document
+        Log.i("Donghub", "loadLinks → $data")
 
-        document.select(".mobius option").forEach { server ->
+        val document = app.get(data, headers = baseHeaders).document
+        val options  = document.select(".mobius option")
+        Log.d("Donghub", "server options ditemukan: ${options.size}")
+
+        options.forEach { server ->
             val base64 = server.attr("value").trim()
             if (base64.isBlank()) return@forEach
 
             try {
                 val decoded   = base64Decode(base64)
-                val iframe    = Jsoup.parse(decoded).selectFirst("iframe") ?: return@forEach
-                val iframeSrc = (iframe.attr("src")
-                    .ifBlank { iframe.attr("data-src") }).trim()
-                if (iframeSrc.isBlank()) return@forEach
+                val iframe    = Jsoup.parse(decoded).selectFirst("iframe") ?: run {
+                    Log.w("Donghub", "tidak ada iframe di decoded: ${decoded.take(100)}")
+                    return@forEach
+                }
+
+                val iframeSrc = iframe.attr("src")
+                    .ifBlank { iframe.attr("data-src") }.trim()
+                if (iframeSrc.isBlank()) {
+                    Log.w("Donghub", "iframe src kosong")
+                    return@forEach
+                }
 
                 val finalUrl = when {
                     iframeSrc.startsWith("http") -> iframeSrc
                     iframeSrc.startsWith("//")   -> "https:$iframeSrc"
-                    else                         -> return@forEach
+                    else -> {
+                        Log.w("Donghub", "URL tidak valid: $iframeSrc")
+                        return@forEach
+                    }
                 }
 
                 val serverLabel = server.text().trim().lowercase()
-                println("🎯 [Donghub] server='$serverLabel'  url=$finalUrl")
+                Log.i("Donghub", "🎯 server='$serverLabel'  url=$finalUrl")
 
-                loadExtractor(finalUrl, data, subtitleCallback, callback)
-    
+                if (finalUrl.contains("dailymotion.com")) {
+                    Log.i("Donghub", "▶ Dailymotion → DonghubDailymotion()")
+                    DonghubDailymotion().getUrl(finalUrl, data, subtitleCallback, callback)
+                } else {
+                    Log.d("Donghub", "▶ loadExtractor → $finalUrl")
+                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+                }
+
             } catch (e: Exception) {
-                println("❌ [Donghub] Error parsing server option: ${e.message}")
+                Log.e("Donghub", "❌ error parsing server: ${e.message}")
             }
         }
 

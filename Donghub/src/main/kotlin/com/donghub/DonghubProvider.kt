@@ -12,6 +12,5 @@ class DonghubProvider: Plugin() {
         registerExtractorAPI(RpmvidExtractor())
         registerExtractorAPI(MegaNzExtractor())
         registerExtractorAPI(DonghubDailymotion())
-        registerExtractorAPI(DonghubGeoDailymotion())
     }
 }
