@@ -81,7 +81,7 @@ open class DonghubDailymotion : ExtractorApi() {
 
         Log.i(TAG, "quality keys: ${qualities.keys}")
 
-        // ── 1. Kirim semua quality spesifik yang tersedia ──────────────
+        // ── 1. Quality spesifik (skip "auto") → Dailymotion 1080p, 720p, dst ──
         for ((key, qValue) in qualityMap) {
             val streams = qualities[key] ?: continue
 
@@ -117,7 +117,7 @@ open class DonghubDailymotion : ExtractorApi() {
             )
         }
 
-        // ── 2. SELALU kirim master M3U8 sebagai "Dailymotion" ──────────
+        // ── 2. Master M3U8 dari "auto" → "Dailymotion" + track resolver ────
         val masterUrl = qualities["auto"]
             ?.firstOrNull { it.url?.contains(".m3u8") == true }
             ?.url
@@ -130,7 +130,7 @@ open class DonghubDailymotion : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = name,
+                    name   = name,  // "Dailymotion" saja — bisa switch resolusi
                     url    = masterUrl,
                     type   = ExtractorLinkType.M3U8
                 ) {
@@ -147,14 +147,14 @@ open class DonghubDailymotion : ExtractorApi() {
             Log.e(TAG, "master m3u8 tidak ditemukan")
         }
 
-        // ── 3. Subtitle ────────────────────────────────────────────────
+        Log.i(TAG, "selesai")
+
+        // ── 3. Subtitle ────────────────────────────────────────────────────
         meta.subtitles?.data?.forEach { (_, sub) ->
             sub.urls.forEach { subUrl ->
                 subtitleCallback(newSubtitleFile(sub.label, subUrl))
             }
         }
-
-        Log.i(TAG, "selesai")
     }
 
     private suspend fun detectMaxQuality(
