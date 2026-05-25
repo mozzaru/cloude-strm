@@ -34,7 +34,7 @@ open class DonghubDailymotion : ExtractorApi() {
         )
 
         private val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
     }
 
     override suspend fun getUrl(
@@ -120,7 +120,7 @@ open class DonghubDailymotion : ExtractorApi() {
             added++
         }
 
-        // ── Strategy 2: Hanya "auto" → kirim master m3u8 langsung ───────────
+        // ── Strategy 2: Hanya "auto" → master m3u8 langsung ─────────────────
         // ExoPlayer handle: audio group + quality track + adaptive buffering
         if (added == 0) {
             Log.w(TAG, "quality spesifik tidak ada, pakai master m3u8 langsung")
@@ -138,7 +138,7 @@ open class DonghubDailymotion : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = name,
+                    name   = name,      // ← "Dailymotion" bersih
                     url    = masterUrl,
                     type   = ExtractorLinkType.M3U8
                 ) {
@@ -194,7 +194,7 @@ open class DonghubDailymotion : ExtractorApi() {
      * 3. https://www.dailymotion.com/video/ID?param=value
      * 4. https://geo.dailymotion.com/player/...?video=ID
      * 5. https://cdndirector.dailymotion.com/cdn/manifest/video/ID.m3u8?sec=...
-     * 6. https://dai.ly/ID  (short URL)
+     * 6. https://dai.ly/ID
      * 7. ID mentah: xab0dty / k4I9E2HCZ2YnSQGaHcy
      */
     private fun getEmbedUrl(url: String): String? {
@@ -214,7 +214,6 @@ open class DonghubDailymotion : ExtractorApi() {
         }
 
         // ── cdndirector.dailymotion.com ──────────────────────────────────────
-        // https://cdndirector.dailymotion.com/cdn/manifest/video/xab0dty.m3u8?sec=...
         if (cleaned.contains("cdndirector.dailymotion.com")) {
             val id = cleaned
                 .substringAfter("/video/")
