@@ -341,13 +341,13 @@ class Donghub : MainAPI() {
                 val serverLabel = server.text().trim().lowercase()
                 Log.i("Donghub", "🎯 server='$serverLabel'  url=$finalUrl")
 
-                if (finalUrl.contains("dailymotion.com")) {
-                    Log.i("Donghub", "▶ Dailymotion → DonghubDailymotion()")
-                    DonghubDailymotion().getUrl(finalUrl, data, subtitleCallback, callback)
-                } else {
-                    Log.d("Donghub", "▶ loadExtractor → $finalUrl")
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
-                }
+                //if (finalUrl.contains("dailymotion.com")) {
+                //    Log.i("Donghub", "▶ Dailymotion → DonghubDailymotion()")
+                //    DonghubDailymotion().getUrl(finalUrl, data, subtitleCallback, callback)
+                ///} else {
+                Log.d("Donghub", "▶ loadExtractor → $finalUrl")
+                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                //}
 
             } catch (e: Exception) {
                 Log.e("Donghub", "❌ error parsing server: ${e.message}")
