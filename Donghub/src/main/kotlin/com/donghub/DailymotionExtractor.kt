@@ -23,25 +23,19 @@ open class DonghubDailymotion : ExtractorApi() {
     companion object {
         private const val TAG = "DonghubDailymotion"
 
-        // Hanya dipakai untuk label nama, bukan memecah stream
-        private val heightToQuality = mapOf(
-            2160 to Qualities.P2160.value,
-            1080 to Qualities.P1080.value,
-            720  to Qualities.P720.value,
-            480  to Qualities.P480.value,
-            360  to Qualities.P360.value,
-            240  to Qualities.P240.value,
-            144  to Qualities.P144.value,
+        private val qualityMap = linkedMapOf(
+            "2160" to Qualities.P2160.value,
+            "1080" to Qualities.P1080.value,
+            "720"  to Qualities.P720.value,
+            "480"  to Qualities.P480.value,
+            "380"  to Qualities.P360.value,
+            "240"  to Qualities.P240.value,
+            "144"  to Qualities.P144.value,
         )
-    }
 
-    private val commonHeaders = mapOf(
-        "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                             "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                             "Chrome/124.0.0.0 Safari/537.36",
-        "Accept"          to "*/*",
-        "Accept-Language" to "en-US,en;q=0.9",
-    )
+        private val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
 
     override suspend fun getUrl(
         url: String,
@@ -57,21 +51,21 @@ open class DonghubDailymotion : ExtractorApi() {
         val id = getVideoId(embedUrl) ?: run {
             Log.e(TAG, "getVideoId gagal: $embedUrl"); return
         }
-        Log.i(TAG, "video id → $id")
+        Log.i(TAG, "video id → $id | embedUrl → $embedUrl")
 
-        val metaUrl  = "$baseUrl/player/metadata/video/$id"
-        val response = app.get(
-            metaUrl,
-            headers = commonHeaders + mapOf(
-                "Referer" to embedUrl,
-                "Origin"  to baseUrl,
-            ),
-            referer = embedUrl
+        val commonHeaders = mapOf(
+            "Referer"    to embedUrl,
+            "Origin"     to baseUrl,
+            "User-Agent" to DESKTOP_UA,
+            "Accept"     to "application/json, */*",
         )
 
+        val metaUrl  = "$baseUrl/player/metadata/video/$id"
+        val response = app.get(metaUrl, headers = commonHeaders, referer = embedUrl)
         Log.i(TAG, "metadata HTTP ${response.code}")
+
         if (!response.isSuccessful) {
-            Log.e(TAG, "metadata gagal: ${response.text.take(200)}"); return
+            Log.e(TAG, "metadata gagal ${response.code}"); return
         }
 
         val meta = try {
@@ -87,45 +81,80 @@ open class DonghubDailymotion : ExtractorApi() {
 
         Log.i(TAG, "quality keys: ${qualities.keys}")
 
-        // ─── STRATEGI: selalu cari master playlist ───────────────────────
-        // "auto" = master HLS dengan semua variant + audio group (BENAR)
-        // Jangan pisah-pisah per resolusi → audio hilang, lag
-        // ─────────────────────────────────────────────────────────────────
+        var added = 0
 
-        val streamHeaders = commonHeaders + mapOf(
-            "Referer" to embedUrl,
-            "Origin"  to baseUrl,
-        )
+        // ── Strategy 1: Quality spesifik (MP4 prioritas → audio muxed) ──────
+        for ((key, qValue) in qualityMap) {
+            val streams = qualities[key] ?: continue
 
-        val masterUrl = findMasterUrl(qualities)
+            val mp4Url = streams.firstOrNull { q ->
+                q.type?.contains("mp4", ignoreCase = true) == true ||
+                q.url?.contains(".mp4") == true
+            }?.url
 
-        if (masterUrl != null) {
-            Log.i(TAG, "master m3u8 → ${masterUrl.take(80)}...")
+            val m3u8Url = streams.firstOrNull { q ->
+                q.url?.contains(".m3u8") == true
+            }?.url
 
-            // Fetch master untuk detect kualitas tertinggi (label saja)
-            val maxHeight = detectMaxHeight(masterUrl, streamHeaders)
-            val quality   = heightToQuality.entries
-                .minByOrNull { (h, _) -> Math.abs(h - maxHeight) }
-                ?.value ?: Qualities.Unknown.value
-            val label = if (maxHeight > 0) "up to ${maxHeight}p" else "Auto"
+            val streamUrl = mp4Url ?: m3u8Url ?: continue
+            val isM3u8    = streamUrl.contains(".m3u8")
 
-            // Kirim SATU link master → ExoPlayer handle quality picker + audio
+            Log.i(TAG, "✅ ${key}p [${if (mp4Url != null) "MP4" else "M3U8"}] → ${streamUrl.take(80)}...")
+
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = "$name $label",
+                    name   = "$name ${key}p",
+                    url    = streamUrl,
+                    type   = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = qValue
+                    this.referer = embedUrl
+                    this.headers = mapOf(
+                        "Referer"    to embedUrl,
+                        "Origin"     to baseUrl,
+                        "User-Agent" to DESKTOP_UA,
+                    )
+                }
+            )
+            added++
+        }
+
+        // ── Strategy 2: Hanya "auto" → kirim master m3u8 langsung ───────────
+        // ExoPlayer handle: audio group + quality track + adaptive buffering
+        if (added == 0) {
+            Log.w(TAG, "quality spesifik tidak ada, pakai master m3u8 langsung")
+
+            val masterUrl = qualities["auto"]
+                ?.firstOrNull { it.url?.contains(".m3u8") == true }
+                ?.url ?: run {
+                    Log.e(TAG, "tidak ada URL yang bisa dipakai"); return
+                }
+
+            val maxQuality = detectMaxQuality(masterUrl, commonHeaders, embedUrl)
+
+            Log.i(TAG, "✅ master stream → ${masterUrl.take(80)}...")
+
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name   = name,
                     url    = masterUrl,
                     type   = ExtractorLinkType.M3U8
                 ) {
-                    this.quality = quality
+                    this.quality = maxQuality
                     this.referer = embedUrl
-                    this.headers = streamHeaders
+                    this.headers = mapOf(
+                        "Referer"    to embedUrl,
+                        "Origin"     to baseUrl,
+                        "User-Agent" to DESKTOP_UA,
+                    )
                 }
             )
-            Log.i(TAG, "✅ 1 master stream dikirim (quality: $label)")
-        } else {
-            Log.e(TAG, "tidak ada .m3u8 ditemukan di semua quality keys")
+            added = 1
         }
+
+        Log.i(TAG, "selesai — $added stream dikirim")
 
         // Subtitle
         meta.subtitles?.data?.forEach { (_, sub) ->
@@ -135,61 +164,109 @@ open class DonghubDailymotion : ExtractorApi() {
         }
     }
 
-    /**
-     * Cari master playlist URL dari qualities map.
-     * Prioritas: "auto" → key lain dengan .m3u8
-     */
-    private fun findMasterUrl(qualities: Map<String, List<Quality>>): String? {
-        // Prioritas utama: "auto" = confirmed master playlist
-        qualities["auto"]?.forEach { q ->
-            val u = q.url ?: return@forEach
-            if (u.contains(".m3u8")) return u
-        }
-        // Fallback: key lain (misal Dailymotion suatu saat ubah struktur)
-        for ((key, list) in qualities) {
-            if (key == "auto") continue
-            list.forEach { q ->
-                val u = q.url ?: return@forEach
-                // Pastikan ini master, bukan segment — cek tidak ada _720 / _1080 pattern
-                if (u.contains(".m3u8") && !u.contains("_${key}")) return u
-            }
-        }
-        return null
-    }
-
-    /**
-     * Fetch master m3u8, parse RESOLUTION untuk tahu kualitas tertinggi.
-     * Hanya untuk label — tidak memisah stream.
-     */
-    private suspend fun detectMaxHeight(
-        masterUrl: String,
-        headers: Map<String, String>
+    private suspend fun detectMaxQuality(
+        masterUrl : String,
+        headers   : Map<String, String>,
+        referer   : String
     ): Int {
         return try {
-            val text = app.get(masterUrl, headers = headers).text
-            Regex("""RESOLUTION=\d+x(\d+)""")
+            val text      = app.get(masterUrl, headers = headers, referer = referer).text
+            val maxHeight = Regex("""RESOLUTION=\d+x(\d+)""")
                 .findAll(text)
                 .mapNotNull { it.groupValues[1].toIntOrNull() }
-                .maxOrNull() ?: 0
+                .maxOrNull() ?: return Qualities.Unknown.value
+
+            Log.d(TAG, "max resolution: ${maxHeight}p")
+
+            qualityMap.entries
+                .minByOrNull { (k, _) -> kotlin.math.abs((k.toIntOrNull() ?: 0) - maxHeight) }
+                ?.value ?: Qualities.Unknown.value
         } catch (e: Exception) {
-            Log.w(TAG, "detectMaxHeight error: ${e.message}")
-            0
+            Log.w(TAG, "detectMaxQuality gagal: ${e.message}")
+            Qualities.Unknown.value
         }
     }
 
+    /**
+     * Support semua format URL Dailymotion:
+     * 1. https://www.dailymotion.com/embed/video/ID
+     * 2. https://www.dailymotion.com/video/ID
+     * 3. https://www.dailymotion.com/video/ID?param=value
+     * 4. https://geo.dailymotion.com/player/...?video=ID
+     * 5. https://cdndirector.dailymotion.com/cdn/manifest/video/ID.m3u8?sec=...
+     * 6. https://dai.ly/ID  (short URL)
+     * 7. ID mentah: xab0dty / k4I9E2HCZ2YnSQGaHcy
+     */
     private fun getEmbedUrl(url: String): String? {
-        if (url.contains("/embed/") || url.contains("/video/")) return url
-        if (url.contains("geo.dailymotion.com")) {
-            val videoId = url.substringAfter("video=")
-            return "$baseUrl/embed/video/$videoId"
+        val cleaned = url.trim()
+
+        // ── Sudah embed URL ──────────────────────────────────────────────────
+        if (cleaned.contains("/embed/video/")) return cleaned
+
+        // ── URL video biasa (dengan atau tanpa query param) ──────────────────
+        if (cleaned.contains("dailymotion.com/video/")) {
+            val id = cleaned
+                .substringAfter("/video/")
+                .substringBefore("?")
+                .substringBefore("/")
+                .trim()
+            return if (id.matches(videoIdRegex)) "$baseUrl/embed/video/$id" else null
         }
+
+        // ── cdndirector.dailymotion.com ──────────────────────────────────────
+        // https://cdndirector.dailymotion.com/cdn/manifest/video/xab0dty.m3u8?sec=...
+        if (cleaned.contains("cdndirector.dailymotion.com")) {
+            val id = cleaned
+                .substringAfter("/video/")
+                .substringBefore(".m3u8")
+                .substringBefore("?")
+                .substringBefore("/")
+                .trim()
+            return if (id.matches(videoIdRegex)) "$baseUrl/embed/video/$id" else null
+        }
+
+        // ── geo.dailymotion.com ──────────────────────────────────────────────
+        if (cleaned.contains("geo.dailymotion.com")) {
+            val id = cleaned
+                .substringAfter("video=")
+                .substringBefore("&")
+                .substringBefore("/")
+                .trim()
+            return if (id.matches(videoIdRegex)) "$baseUrl/embed/video/$id" else null
+        }
+
+        // ── dai.ly short URL ─────────────────────────────────────────────────
+        if (cleaned.contains("dai.ly/")) {
+            val id = cleaned
+                .substringAfter("dai.ly/")
+                .substringBefore("?")
+                .substringBefore("/")
+                .trim()
+            return if (id.matches(videoIdRegex)) "$baseUrl/embed/video/$id" else null
+        }
+
+        // ── ID mentah (xab0dty / k4I9E2HCZ2YnSQGaHcy) ──────────────────────
+        val rawId = cleaned.substringBefore("?").substringBefore("/").trim()
+        if (rawId.matches(videoIdRegex)) {
+            return "$baseUrl/embed/video/$rawId"
+        }
+
         return null
     }
 
     private fun getVideoId(url: String): String? {
-        val path = URI(url).path
-        val id   = path.substringAfter("/video/")
-        return if (id.matches(videoIdRegex)) id else null
+        return try {
+            val path = URI(url).path
+            val id   = path
+                .substringAfter("/video/")
+                .substringBefore("?")
+                .substringBefore("/")
+                .trim()
+            if (id.matches(videoIdRegex)) id else null
+        } catch (e: Exception) {
+            Log.e(TAG, "getVideoId error: ${e.message}")
+            null
+        }
     }
 
     data class MetaData(
