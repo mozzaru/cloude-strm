@@ -234,44 +234,49 @@ class MegaNzExtractor : ExtractorApi() {
         private val ext      : String
     ) {
         private var serverSocket : ServerSocket? = null
-        private val executor     = Executors.newFixedThreadPool(8)
+        private val executor     = Executors.newCachedThreadPool() // FIX: pakai cached agar tidak deadlock
         @Volatile private var running = true
-
+    
         fun start(): Int {
-            val ss = ServerSocket(0)
+            val ss = ServerSocket(0).also {
+                it.reuseAddress = true          // FIX: izinkan reuse port
+                it.soTimeout    = 0             // FIX: accept() tidak timeout
+            }
             serverSocket = ss
             executor.submit { acceptLoop(ss) }
             Log.d(TAG, "Proxy accept loop started on port ${ss.localPort}")
             return ss.localPort
         }
-
+    
         fun stop() {
             running = false
             try { serverSocket?.close() } catch (_: Exception) {}
             executor.shutdownNow()
             Log.d(TAG, "Proxy stopped")
         }
-
+    
         private fun acceptLoop(ss: ServerSocket) {
             while (running) {
                 try {
                     val client = ss.accept()
+                    client.tcpNoDelay = true     // FIX: kurangi latency
                     Log.d(TAG, "New client: ${client.inetAddress}")
                     executor.submit { handleClient(client) }
                 } catch (_: Exception) { break }
             }
         }
-
+    
         private fun handleClient(client: java.net.Socket) {
             try {
-                client.soTimeout = 120_000
+                client.soTimeout = 0             // FIX: jangan timeout saat streaming
                 client.use { sock ->
-                    val reader = sock.getInputStream().bufferedReader(Charsets.US_ASCII)
-                    val output = sock.getOutputStream()
-
+                    val inputStream = sock.getInputStream()
+                    val reader      = inputStream.bufferedReader(Charsets.US_ASCII)
+                    val output      = sock.getOutputStream()
+    
                     val requestLine = reader.readLine() ?: return
                     Log.d(TAG, "Request: $requestLine")
-
+    
                     val headers = mutableMapOf<String, String>()
                     while (true) {
                         val line = reader.readLine() ?: break
@@ -281,19 +286,23 @@ class MegaNzExtractor : ExtractorApi() {
                             headers[line.substring(0, idx).trim().lowercase()] =
                                 line.substring(idx + 1).trim()
                     }
-
+    
                     val method = requestLine.substringBefore(" ").uppercase()
                     if (method == "HEAD") {
-                        sendResponseHeaders(output, 200, fileSize,
-                            0L, if (fileSize > 0) fileSize - 1 else 0L, fileSize, false)
+                        sendResponseHeaders(
+                            output, 200, fileSize,
+                            0L, if (fileSize > 0) fileSize - 1 else 0L,
+                            fileSize, false
+                        )
+                        output.flush()
                         return
                     }
-
-                    val rangeHeader            = headers["range"]
+    
+                    val rangeHeader = headers["range"]
                     val (rangeStart, rangeEnd) = parseRange(rangeHeader, fileSize)
-                    val contentLength          = if (fileSize > 0 && rangeEnd >= 0)
+                    val contentLength = if (fileSize > 0 && rangeEnd >= 0)
                         rangeEnd - rangeStart + 1 else -1L
-
+    
                     Log.d(TAG, "Range: $rangeStart-$rangeEnd  contentLength=$contentLength")
                     streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
                 }
@@ -301,7 +310,7 @@ class MegaNzExtractor : ExtractorApi() {
                 Log.w(TAG, "handleClient error: ${e.message}")
             }
         }
-
+    
         private fun streamFromCdn(
             output        : OutputStream,
             rangeHeader   : String?,
@@ -313,6 +322,8 @@ class MegaNzExtractor : ExtractorApi() {
             val blockOffset = (rangeStart % 16).toInt()
             val cdnFrom     = blockStart * 16
             val adjustedIv  = incrementIv(ctrIv, blockStart)
+
+            // FIX: Jika fileSize tidak diketahui, jangan tambahkan batas atas range
             val cdnRangeHdr = if (fileSize > 0) "bytes=$cdnFrom-${fileSize - 1}"
                               else              "bytes=$cdnFrom-"
 
@@ -330,25 +341,47 @@ class MegaNzExtractor : ExtractorApi() {
                 .build()
 
             Log.d(TAG, "CDN request → Range: $cdnRangeHdr")
-            val cdnResp = httpClient.newCall(cdnReq).execute()
+
+            val cdnResp = try {
+                httpClient.newCall(cdnReq).execute()
+            } catch (e: Exception) {
+                Log.e(TAG, "CDN request failed: ${e.message}")
+                sendError(output, 502)
+                return
+            }
+
             Log.d(TAG, "CDN response: ${cdnResp.code}")
 
+            // FIX: Terima 200 dan 206
+            if (cdnResp.code !in listOf(200, 206)) {
+                Log.e(TAG, "CDN returned ${cdnResp.code}")
+                sendError(output, 502)
+                cdnResp.close()
+                return
+            }
+
             val body = cdnResp.body ?: run {
-                sendError(output, 502); return
+                Log.e(TAG, "CDN body null")
+                sendError(output, 502)
+                return
             }
 
             val isPartial = rangeHeader != null
-            sendResponseHeaders(output,
+            sendResponseHeaders(
+                output,
                 if (isPartial) 206 else 200,
-                contentLength, rangeStart, rangeEnd, fileSize, isPartial)
+                contentLength, rangeStart, rangeEnd, fileSize, isPartial
+            )
 
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE,
-                        SecretKeySpec(aesKey, "AES"),
-                        IvParameterSpec(adjustedIv))
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(aesKey, "AES"),
+                IvParameterSpec(adjustedIv)
+            )
 
             val encStream = body.byteStream()
-            val buf       = ByteArray(65536)
+            val buf       = ByteArray(131072)  // FIX: 128KB buffer lebih efisien
             var toSkip    = blockOffset
             var remaining = contentLength
             var totalSent = 0L
@@ -362,17 +395,19 @@ class MegaNzExtractor : ExtractorApi() {
                     val n = encStream.read(buf, 0, want)
                     if (n <= 0) break
 
-                    val dec = cipher.update(buf, 0, n) ?: continue
+                    // FIX: Tangani null dari cipher.update() dengan benar
+                    val dec = cipher.update(buf, 0, n)
+                    if (dec == null || dec.isEmpty()) continue
 
-                    val writeData: ByteArray
-                    if (toSkip > 0) {
-                        val from  = toSkip.coerceAtMost(dec.size)
-                        toSkip    = maxOf(0, toSkip - dec.size)
-                        writeData = if (from < dec.size) dec.copyOfRange(from, dec.size)
-                                    else ByteArray(0)
+                    val writeData: ByteArray = if (toSkip > 0) {
+                        val from = minOf(toSkip, dec.size)
+                        toSkip = maxOf(0, toSkip - dec.size)
+                        if (from < dec.size) dec.copyOfRange(from, dec.size)
+                        else ByteArray(0)
                     } else {
-                        writeData = dec
+                        dec
                     }
+
                     if (writeData.isEmpty()) continue
 
                     val toWrite = if (remaining > 0)
@@ -380,13 +415,13 @@ class MegaNzExtractor : ExtractorApi() {
                     else writeData
 
                     output.write(toWrite)
+                    output.flush()             // FIX: flush per chunk agar ExoPlayer tidak timeout
                     totalSent += toWrite.size
                     if (remaining > 0) remaining -= toWrite.size
                 }
-                output.flush()
                 Log.d(TAG, "Stream done — sent ${totalSent / 1024} KB")
-            } catch (_: java.io.IOException) {
-                Log.d(TAG, "Client disconnected (seek/close) after ${totalSent / 1024} KB")
+            } catch (e: java.io.IOException) {
+                Log.d(TAG, "Client disconnected after ${totalSent / 1024} KB: ${e.message}")
             } finally {
                 body.close()
                 cdnResp.close()
@@ -406,13 +441,18 @@ class MegaNzExtractor : ExtractorApi() {
             out: OutputStream, statusCode: Int, contentLength: Long,
             rangeStart: Long, rangeEnd: Long, total: Long, isPartial: Boolean
         ) {
-            val mime   = if (ext == "mkv") "video/x-matroska" else "video/mp4"
+            val mime   = when (ext) {
+                "mkv"  -> "video/x-matroska"
+                "webm" -> "video/webm"
+                else   -> "video/mp4"
+            }
             val status = if (statusCode == 206) "206 Partial Content" else "200 OK"
             val sb     = StringBuilder()
             sb.append("HTTP/1.1 $status\r\n")
             sb.append("Content-Type: $mime\r\n")
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Connection: keep-alive\r\n")
+            // FIX: Selalu kirim Content-Length jika diketahui
             if (contentLength > 0) sb.append("Content-Length: $contentLength\r\n")
             if (isPartial && total > 0)
                 sb.append("Content-Range: bytes $rangeStart-$rangeEnd/$total\r\n")
@@ -422,9 +462,13 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun sendError(out: OutputStream, code: Int) {
-            out.write("HTTP/1.1 $code Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                .toByteArray(Charsets.US_ASCII))
-            out.flush()
+            try {
+                out.write(
+                    "HTTP/1.1 $code Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+            } catch (_: Exception) {}
         }
     }
 }
