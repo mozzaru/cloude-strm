@@ -44,6 +44,22 @@ class Donghub : MainAPI() {
 
     private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
 
+    private val indonesianMonths = mapOf(
+        "januari" to "January", "februari" to "February", "maret" to "March",
+        "april" to "April", "mei" to "May", "juni" to "June",
+        "juli" to "July", "agustus" to "August", "september" to "September",
+        "oktober" to "October", "november" to "November", "desember" to "December"
+    )
+
+    private fun parseIndonesianDate(raw: String): Long? {
+        var normalized = raw.trim().lowercase()
+        indonesianMonths.forEach { (id, en) -> normalized = normalized.replace(id, en) }
+        return try {
+            java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.ENGLISH)
+                .parse(normalized.replaceFirstChar { it.uppercaseChar() })?.time
+        } catch (_: Exception) { null }
+    }
+
     private fun episodeUrlToSeriesUrl(epUrl: String): String? {
         val match = episodeUrlRegex.find(epUrl) ?: return null
         val basePath = epUrl.substring(0, match.range.first)
@@ -267,10 +283,15 @@ class Donghub : MainAPI() {
                     ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
                 val rawEpTitle = li.selectFirst("div.epl-title")?.text()?.trim().orEmpty()
                 val cleanTitle = cleanEpisodeTitle(rawEpTitle, title, epNum)
+
+                val rawDate = li.selectFirst("div.epl-date")?.text()?.trim()
+                val epDate: Long? = rawDate?.let { parseIndonesianDate(it) }
+
                 newEpisode(epHref) {
                     this.name      = cleanTitle
                     this.episode   = epNum
                     this.posterUrl = poster
+                    this.date      = epDate
                 }
             }.reversed()
         } else {
@@ -341,16 +362,8 @@ class Donghub : MainAPI() {
                 val serverLabel = server.text().trim().lowercase()
                 Log.i("Donghub", "🎯 server='$serverLabel'  url=$finalUrl")
 
-                //if (finalUrl.contains("geo.dailymotion.com")) {
-                //    Log.i("Donghub", "▶ GeoDailymotion → DonghubGeodailymotion()")
-                //    DonghubGeodailymotion().getUrl(finalUrl, data, subtitleCallback, callback)
-                //} else if (finalUrl.contains("dailymotion.com")) {
-                //    Log.i("Donghub", "▶ Dailymotion → DonghubDailymotion()")
-                //    DonghubDailymotion().getUrl(finalUrl, data, subtitleCallback, callback)
-                //} else {
                 Log.d("Donghub", "▶ loadExtractor → $finalUrl")
                 loadExtractor(finalUrl, data, subtitleCallback, callback)
-                //}
             } catch (e: Exception) {
                 Log.e("Donghub", "❌ error parsing server: ${e.message}")
             }
