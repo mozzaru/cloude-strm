@@ -268,7 +268,7 @@ class MegaNzExtractor : ExtractorApi() {
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = "$name $label",
+                name   = name,
                 url    = playUrl,
                 type   = ExtractorLinkType.VIDEO
             ) {
@@ -365,15 +365,17 @@ class MegaNzExtractor : ExtractorApi() {
             val cdnFrom     = blockStart * 16
             val adjustedIv  = incrementIv(ctrIv, blockStart)
 
-            val alignedRangeEnd = if (rangeEnd > 0) {
-                val nextBlock = ((rangeEnd / 16) + 1) * 16 - 1
-                nextBlock
+            // Jika rangeEnd eksplisit (ExoPlayer probe/seek), align ke block
+            // boundary berikutnya saja — jangan tambah MAX_CDN_FETCH ekstra
+            // karena itu menyebabkan CDN kirim data jauh melebihi yang
+            // dibutuhkan dan ExoPlayer sering disconnect → DECODER_INIT_FAILED.
+            // Jika open-ended (rangeEnd <= 0), pakai MAX_CDN_FETCH sebagai batas.
+            val cdnTo = if (rangeEnd > 0) {
+                val aligned = ((rangeEnd / 16) + 1) * 16 - 1
+                if (fileSize > 0) aligned.coerceAtMost(fileSize - 1) else aligned
             } else {
-                cdnFrom + MAX_CDN_FETCH - 1
-            }
-            val cdnTo = when {
-                fileSize > 0 -> (alignedRangeEnd + MAX_CDN_FETCH).coerceAtMost(fileSize - 1)
-                else         -> alignedRangeEnd + MAX_CDN_FETCH
+                val openEnd = cdnFrom + MAX_CDN_FETCH - 1
+                if (fileSize > 0) openEnd.coerceAtMost(fileSize - 1) else openEnd
             }
             val cdnRangeHdr = "bytes=$cdnFrom-$cdnTo"
 

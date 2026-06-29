@@ -125,12 +125,13 @@ open class CustomDailymotion : ExtractorApi() {
             Log.d(TAG, "Master m3u8: ${masterM3u8Url.take(80)}...")
 
             // ── 2. Kirim master URL sebagai satu link "Auto" ──────
-            //    Player (ExoPlayer) akan membaca semua track dari manifest
-            //    dan menampilkan pilihan resolusi langsung di player.
+            //    Gunakan name eksplisit "Auto" agar CloudStream tidak
+            //    menambahkan label quality di belakangnya (menghindari
+            //    label ganda seperti "Dailymotion Auto Auto").
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = name,
+                    name   = "$name Auto",
                     url    = masterM3u8Url,
                     type   = ExtractorLinkType.M3U8
                 ) {
@@ -154,7 +155,7 @@ open class CustomDailymotion : ExtractorApi() {
                     callback.invoke(
                         newExtractorLink(
                             source = name,
-                            name   = "$name $qualityLabel",
+                            name   = name,
                             url    = variant.url,
                             type   = ExtractorLinkType.M3U8
                         ) {
@@ -184,7 +185,7 @@ open class CustomDailymotion : ExtractorApi() {
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name   = "$name $qualityLabel",
+                        name   = name,
                         url    = entryUrl,
                         type   = ExtractorLinkType.VIDEO
                     ) {
