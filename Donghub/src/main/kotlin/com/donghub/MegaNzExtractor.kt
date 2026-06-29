@@ -251,6 +251,7 @@ class MegaNzExtractor : ExtractorApi() {
 
         Log.d(TAG, "Starting proxy server...")
         val proxy = MegaStreamProxy(
+            nodeId   = nodeId,
             cdnUrl   = cdnUrl,
             aesKey   = aesKey,
             ctrIv    = ctrIv,
@@ -267,7 +268,7 @@ class MegaNzExtractor : ExtractorApi() {
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = "$name ($label)",
+                name   = "$name $label",
                 url    = playUrl,
                 type   = ExtractorLinkType.VIDEO
             ) {
@@ -280,7 +281,8 @@ class MegaNzExtractor : ExtractorApi() {
     }
 
     private inner class MegaStreamProxy(
-        private val cdnUrl   : String,
+        private val nodeId   : String,
+        @Volatile private var cdnUrl: String,
         private val aesKey   : ByteArray,
         private val ctrIv    : ByteArray,
         private val fileSize : Long,
@@ -403,23 +405,62 @@ class MegaNzExtractor : ExtractorApi() {
 
             Log.d(TAG, "CDN response: ${cdnResp.code}")
 
-            if (cdnResp.code !in listOf(200, 206)) {
-                Log.w(TAG, "CDN returned ${cdnResp.code}, retrying once...")
+            if (cdnResp.code == 403) {
+                Log.w(TAG, "CDN returned 403 (URL expired), re-fetching from Mega API...")
                 cdnResp.close()
-                Thread.sleep(1000)
-                cdnResp = try {
-                    httpClient.newCall(cdnReq).execute()
+                // Re-fetch fresh CDN URL from Mega API
+                val freshInfo = try {
+                    val resp = httpClient.newCall(
+                        Request.Builder()
+                            .url("$MEGA_API?id=1")
+                            .post("""[{"a":"g","g":1,"p":"$nodeId"}]"""
+                                .toRequestBody("application/json".toMediaType()))
+                            .header("Content-Type", "application/json")
+                            .header("Origin",  "https://mega.nz")
+                            .header("Referer", "https://mega.nz/")
+                            .build()
+                    ).execute()
+                    val arr = Json.parseToJsonElement(resp.body!!.string()).jsonArray
+                    if (arr.isNotEmpty() && arr[0] is JsonObject) arr[0].jsonObject else null
                 } catch (e: Exception) {
-                    Log.e(TAG, "CDN retry failed: ${e.message}")
+                    Log.e(TAG, "Re-fetch CDN URL failed: ${e.message}")
+                    null
+                }
+                val freshCdnUrl = freshInfo?.get("g")?.jsonPrimitive?.contentOrNull
+                if (freshCdnUrl == null) {
+                    Log.e(TAG, "Cannot get fresh CDN URL, giving up")
+                    sendError(output, 503)
+                    return
+                }
+                Log.i(TAG, "Got fresh CDN URL, retrying request")
+                cdnUrl = freshCdnUrl  // update for future requests too
+                val retryReq = Request.Builder()
+                    .url(freshCdnUrl)
+                    .header("User-Agent",
+                        "Mozilla/5.0 (Linux; Android 10; K) " +
+                        "AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
+                    .header("Origin",  "https://mega.nz")
+                    .header("Referer", "https://mega.nz/")
+                    .header("Range",   cdnRangeHdr)
+                    .build()
+                cdnResp = try {
+                    httpClient.newCall(retryReq).execute()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Retry with fresh CDN URL failed: ${e.message}")
                     sendError(output, 502)
                     return
                 }
                 if (cdnResp.code !in listOf(200, 206)) {
-                    Log.e(TAG, "CDN returned ${cdnResp.code} after retry")
+                    Log.e(TAG, "Fresh CDN URL also returned ${cdnResp.code}")
                     sendError(output, 502)
                     cdnResp.close()
                     return
                 }
+            } else if (cdnResp.code !in listOf(200, 206)) {
+                Log.e(TAG, "CDN returned ${cdnResp.code}, giving up")
+                sendError(output, 502)
+                cdnResp.close()
+                return
             }
 
             val body = cdnResp.body ?: run {

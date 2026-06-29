@@ -130,7 +130,7 @@ open class CustomDailymotion : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = "$name (Auto)",
+                    name   = name,
                     url    = masterM3u8Url,
                     type   = ExtractorLinkType.M3U8
                 ) {
@@ -138,7 +138,7 @@ open class CustomDailymotion : ExtractorApi() {
                     this.referer = correctReferer
                 }
             )
-            Log.i(TAG, "Sent master m3u8 as adaptive 'Auto' track")
+            Log.i(TAG, "Sent master m3u8 as adaptive track")
 
             // ── 3. Parse manifest → kirim juga per-variant ────────
             //    Agar user bisa memilih resolusi spesifik dari daftar sumber.
@@ -154,7 +154,7 @@ open class CustomDailymotion : ExtractorApi() {
                     callback.invoke(
                         newExtractorLink(
                             source = name,
-                            name   = "$name ($qualityLabel)",
+                            name   = "$name $qualityLabel",
                             url    = variant.url,
                             type   = ExtractorLinkType.M3U8
                         ) {
@@ -184,7 +184,7 @@ open class CustomDailymotion : ExtractorApi() {
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name   = "$name ($qualityLabel MP4)",
+                        name   = "$name $qualityLabel",
                         url    = entryUrl,
                         type   = ExtractorLinkType.VIDEO
                     ) {
