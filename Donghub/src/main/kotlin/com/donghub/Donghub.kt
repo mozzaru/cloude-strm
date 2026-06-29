@@ -43,8 +43,10 @@ class Donghub : MainAPI() {
         "anime/?status=&type=movie&order=" to "Movie"
     )
 
-    private val geoDmExtractor = CustomGeoDailymotion()
-    private val dmExtractor    = CustomDailymotion()
+    private val geoDmExtractor  = CustomGeoDailymotion()
+    private val dmExtractor     = CustomDailymotion()
+    private val megaExtractor   = MegaNzExtractor()
+    private val dtubeExtractor  = DtubeExtractor()
 
     private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
 
@@ -429,12 +431,11 @@ class Donghub : MainAPI() {
     
                 val serverLabel = server.text().trim()
                 Log.i(TAG, "========================================")
-                Log.i(TAG, "Processing server: '$serverLabel'")
-                Log.i(TAG, "URL: $finalUrl")
+                Log.i(TAG, "Label: '$serverLabel'  →  URL: $finalUrl")
                 Log.i(TAG, "========================================")
     
                 when {
-                    // ── Dailymotion: call custom extractor directly ──────
+                    // ── Dailymotion ──────────────────────────────────────
                     "geo.dailymotion.com" in finalUrl -> {
                         Log.d(TAG, "▶ CustomGeoDailymotion.getUrl")
                         geoDmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
@@ -445,24 +446,24 @@ class Donghub : MainAPI() {
                         dmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
                         extractedCount++
                     }
-    
-                    // ── DTube: loadExtractor with custom extractor ──────
-                    "d.tube" in finalUrl || "d.tube" in finalUrl.lowercase() -> {
-                        Log.d(TAG, "▶ loadExtractor DTube")
-                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+
+                    // ── Mega ─────────────────────────────────────────────
+                    "mega.nz" in finalUrl || "mega.co.nz" in finalUrl -> {
+                        Log.d(TAG, "▶ MegaNzExtractor.getUrl  url=$finalUrl")
+                        megaExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
                         extractedCount++
                     }
-                    
-                    // ── Mega: loadExtractor with custom extractor ──────
-                    "mega.nz" in finalUrl.lowercase() || "mega.co.nz" in finalUrl.lowercase() -> {
-                        Log.d(TAG, "▶ loadExtractor Mega")
-                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+
+                    // ── DTube ────────────────────────────────────────────
+                    "d.tube" in finalUrl -> {
+                        Log.d(TAG, "▶ DtubeExtractor.getUrl  url=$finalUrl")
+                        dtubeExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
                         extractedCount++
                     }
     
-                    // ── Other extractors ───────────────────────────────
+                    // ── Other extractors ─────────────────────────────────
                     else -> {
-                        Log.d(TAG, "▶ loadExtractor fallback")
+                        Log.d(TAG, "▶ loadExtractor fallback  url=$finalUrl")
                         loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
                         extractedCount++
                     }
