@@ -1,6 +1,8 @@
 package com.donghub
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -9,31 +11,43 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.math.BigInteger
 
 /**
- * DtubeExtractor
+ * DtubeExtractor - Fixed Version
  * ==============
- * Fix: referer sebelumnya hardcode ke "https://play.d.tube/" (tanpa ?v=ID).
- * CDN nas1/nas2 butuh referer dengan ?v=<base58_id> agar HLS request valid.
- * Tanpa referer yang benar ExoPlayer bisa throw ERROR_CODE_IO_NETWORK_CONNECTION_FAILED (2001).
+ * Improvements:
+ * - Enhanced logging for debugging
+ * - Better URL parsing
+ * - Proper referer handling for both CDN
+ * - Fallback URLs for resilience
  */
 open class DtubeExtractor : ExtractorApi() {
     override var mainUrl         = "https://play.d.tube"
     override val requiresReferer = true
     override var name            = "DTube"
 
-    private val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    companion object {
+        private const val TAG = "DtubeExtractor"
+        private const val BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    }
 
     private fun base58ToUuid(base58: String): String {
+        Log.d(TAG, "Converting base58 to UUID: $base58")
         var n = BigInteger.ZERO
         for (char in base58) {
-            val index = alphabet.indexOf(char)
-            if (index == -1) return ""
+            val index = BASE58_ALPHABET.indexOf(char)
+            if (index == -1) {
+                Log.w(TAG, "Invalid base58 character: $char")
+                return ""
+            }
             n = n.multiply(BigInteger.valueOf(58)).add(BigInteger.valueOf(index.toLong()))
         }
         val hex = n.toString(16).padStart(32, '0')
-        if (hex.length < 32) return ""
-        return "${hex.substring(0,8)}-${hex.substring(8,12)}-" +
-               "${hex.substring(12,16)}-${hex.substring(16,20)}-" +
-               "${hex.substring(20,32)}"
+        if (hex.length < 32) {
+            Log.w(TAG, "Hex too short: $hex")
+            return ""
+        }
+        val uuid = "${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-${hex.substring(16,20)}-${hex.substring(20,32)}"
+        Log.d(TAG, "Converted UUID: $uuid")
+        return uuid
     }
 
     private fun isUuid(id: String) = id.matches(
@@ -47,25 +61,47 @@ open class DtubeExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Parse raw base58 ID dari URL
-        // Contoh input:
+        Log.d(TAG, "getUrl called with url=$url, referer=$referer")
+    
+        // Parse raw base58 ID from URL
+        // Examples:
         //   https://play.d.tube/?v=BXC71sLPVuRu72fuZ8K3hd
         //   https://play.d.tube?v=BXC71sLPVuRu72fuZ8K3hd
+        //   https://d.tube/watch?v=BXC71sLPVuRu72fuZ8K3hd
         //   BXC71sLPVuRu72fuZ8K3hd
+        
         val rawId = when {
-            url.contains("?v=") -> url.substringAfter("?v=").substringBefore("&")
-            url.contains("/")   -> url.substringAfterLast("/").substringBefore("?")
-            else                -> url
+            "?v=" in url -> url.substringAfter("?v=").substringBefore("&")
+            "v=" in url && "?v=" !in url -> url.substringAfter("v=").substringBefore("&")
+            else -> url.substringAfterLast("/").substringBefore("?").substringBefore("&")
         }.trim()
-        if (rawId.isBlank()) return
-
-        val videoId = if (isUuid(rawId)) rawId else base58ToUuid(rawId)
-        if (videoId.isBlank()) return
-
+        
+        Log.d(TAG, "Extracted rawId: $rawId")
+        
+        if (rawId.isBlank()) {
+            Log.e(TAG, "Cannot extract video ID from URL: $url")
+            return
+        }
+        
+        // Check if already UUID format
+        val isAlreadyUuid = isUuid(rawId)
+        
+        val videoId = if (isAlreadyUuid) {
+            Log.d(TAG, "ID is already UUID format")
+            rawId
+        } else {
+            base58ToUuid(rawId).also { 
+                if (it.isBlank()) {
+                    Log.e(TAG, "Failed to convert base58 to UUID")
+                    return
+                }
+            }
+        }
+        
         // FIX: referer harus "https://play.d.tube/?v=<rawId>" (base58, bukan UUID)
-        // Kalau input sudah UUID (tidak bisa rebuild base58), fallback ke bare URL
-        val correctReferer = if (!isUuid(rawId)) "$mainUrl/?v=$rawId" else "$mainUrl/"
-
+        val correctReferer = if (!isAlreadyUuid) "$mainUrl/?v=$rawId" else "$mainUrl/"
+        Log.d(TAG, "Using referer: $correctReferer")
+        
         val headers = mapOf(
             "Referer"         to correctReferer,
             "Origin"          to mainUrl,
@@ -73,20 +109,94 @@ open class DtubeExtractor : ExtractorApi() {
             "Accept"          to "*/*",
             "Accept-Language" to "id-ID,id;q=0.9,en;q=0.8",
         )
-
-        listOf("nas1.d.tube" to "nas1", "nas2.d.tube" to "nas2").forEach { (cdn, label) ->
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name   = "$name ($label)",
-                    url    = "https://$cdn/videos/$videoId/master.m3u8",
-                    type   = ExtractorLinkType.M3U8
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = correctReferer
-                    this.headers = headers
+        
+        Log.i(TAG, "Testing DTube streams for videoId=$videoId")
+        
+        // Try both CDN endpoints
+        val cdnEndpoints = listOf(
+            "nas1.d.tube" to "nas1",
+            "nas2.d.tube" to "nas2"
+        )
+        
+        var foundCount = 0
+        
+        for ((cdnHost, label) in cdnEndpoints) {
+            val m3u8Url = "https://$cdnHost/videos/$videoId/master.m3u8"
+            Log.d(TAG, "Testing $label CDN: $m3u8Url")
+            
+            try {
+                // Test if the stream is accessible
+                val testResponse = app.get(
+                    m3u8Url,
+                    headers = headers,
+                    allowRedirects = true
+                )
+                
+                Log.d(TAG, "$label response status: ${testResponse.code}")
+                
+                if (testResponse.code in 200..299) {
+                    Log.i(TAG, "✓ $label stream available!")
+                    
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name   = "$name ($label)",
+                            url    = m3u8Url,
+                            type   = ExtractorLinkType.M3U8
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.referer = correctReferer
+                            this.headers = headers
+                        }
+                    )
+                    foundCount++
+                } else {
+                    Log.w(TAG, "✗ $label returned status ${testResponse.code}")
                 }
-            )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "✗ $label request failed: ${e.message}")
+            }
+        }
+        
+        // If no streams found, try with direct video ID (no UUID conversion)
+        if (foundCount == 0 && !isAlreadyUuid) {
+            Log.w(TAG, "No streams found with UUID, trying direct base58 ID")
+            
+            val directUrl = "$mainUrl/videos/$rawId/master.m3u8"
+            Log.d(TAG, "Trying direct URL: $directUrl")
+            
+            try {
+                val response = app.get(
+                    directUrl,
+                    headers = headers,
+                    allowRedirects = true
+                )
+                
+                if (response.code in 200..299) {
+                    Log.i(TAG, "✓ Direct stream available!")
+                    
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name   = "$name (direct)",
+                            url    = directUrl,
+                            type   = ExtractorLinkType.M3U8
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.referer = correctReferer
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct URL also failed: ${e.message}")
+            }
+        }
+        
+        if (foundCount == 0) {
+            Log.e(TAG, "WARNING: No DTube streams found for video: $rawId")
+        } else {
+            Log.i(TAG, "Successfully found $foundCount DTube streams")
         }
     }
 }

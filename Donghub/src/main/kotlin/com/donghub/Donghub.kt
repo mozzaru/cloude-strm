@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.util.Base64
 
 class Donghub : MainAPI() {
     override var mainUrl = "https://donghub.vip"
@@ -283,7 +284,7 @@ class Donghub : MainAPI() {
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 val epNum  = li.selectFirst("div.epl-num")?.text()?.trim()
-                    ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+                    ?.replace(Regex("""[^0-9]"""), "")?.toIntOrNull()
                 val rawEpTitle = li.selectFirst("div.epl-title")?.text()?.trim().orEmpty()
                 val cleanTitle = cleanEpisodeTitle(rawEpTitle, title, epNum)
 
@@ -323,33 +324,97 @@ class Donghub : MainAPI() {
         }
     }
 
+    private fun base64Decode(encoded: String): String {
+        return try {
+            val decodedBytes = Base64.getDecoder().decode(encoded.trim())
+            String(decodedBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.w(TAG, "Base64 decode failed: ${e.message}")
+            ""
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.i("Donghub", "loadLinks → $data")
+        Log.i(TAG, "=== loadLinks called ===")
+        Log.d(TAG, "Data URL: $data")
     
         val document = app.get(data, headers = baseHeaders).document
         val options  = document.select(".mobius option")
-        Log.d("Donghub", "server options ditemukan: ${options.size}")
+        
+        Log.i(TAG, "Server options found: ${options.size}")
+        
+        // Log all server options for debugging
+        options.forEachIndexed { index, option ->
+            val serverName = option.text().trim()
+            val optionValue = option.attr("value")
+            Log.d(TAG, "Server [$index]: name='$serverName', value_len=${optionValue.length}")
+        }
     
+        if (options.isEmpty()) {
+            Log.w(TAG, "NO server options found on page!")
+            // Try to find iframes directly
+            val iframes = document.select("iframe")
+            Log.d(TAG, "Direct iframes found: ${iframes.size}")
+            iframes.forEachIndexed { index, iframe ->
+                val src = iframe.attr("src")
+                Log.d(TAG, "  Iframe [$index]: $src")
+            }
+        }
+    
+        var extractedCount = 0
+        var skippedCount = 0
+        
         options.forEach { server ->
             val base64 = server.attr("value").trim()
-            if (base64.isBlank()) return@forEach
+            if (base64.isBlank()) {
+                Log.w(TAG, "Empty option value, skipping")
+                skippedCount++
+                return@forEach
+            }
     
             try {
+                Log.d(TAG, "Decoding server option...")
                 val decoded  = base64Decode(base64)
+                
+                if (decoded.isBlank()) {
+                    Log.w(TAG, "Decoded string is empty")
+                    skippedCount++
+                    return@forEach
+                }
+                
+                Log.d(TAG, "Decoded length: ${decoded.length} chars")
+                Log.d(TAG, "Decoded preview: ${decoded.take(150)}...")
+                
                 val iframe   = Jsoup.parse(decoded).selectFirst("iframe") ?: run {
-                    Log.w("Donghub", "tidak ada iframe: ${decoded.take(100)}")
+                    Log.w(TAG, "No iframe found in decoded content")
+                    // Try looking for other video sources
+                    val videoSrc = Jsoup.parse(decoded).selectFirst("video source")?.attr("src")
+                    if (videoSrc != null) {
+                        Log.d(TAG, "Found video source: $videoSrc")
+                        callback.invoke(newExtractorLink(
+                            source = "DirectVideo",
+                            name   = "Direct Video",
+                            url    = videoSrc,
+                            type   = ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.referer = data
+                        })
+                        extractedCount++
+                    }
                     return@forEach
                 }
     
                 val iframeSrc = iframe.attr("src")
                     .ifBlank { iframe.attr("data-src") }.trim()
                 if (iframeSrc.isBlank()) {
-                    Log.w("Donghub", "iframe src kosong")
+                    Log.w(TAG, "Iframe src is blank")
+                    skippedCount++
                     return@forEach
                 }
     
@@ -357,47 +422,66 @@ class Donghub : MainAPI() {
                     iframeSrc.startsWith("http") -> iframeSrc
                     iframeSrc.startsWith("//")   -> "https:$iframeSrc"
                     else -> {
-                        Log.w("Donghub", "URL tidak valid: $iframeSrc")
+                        Log.w(TAG, "Invalid URL format: $iframeSrc")
                         return@forEach
                     }
                 }
     
-                val serverLabel = server.text().trim().lowercase()
-                Log.i("Donghub", "server='$serverLabel'  url=$finalUrl")
+                val serverLabel = server.text().trim()
+                Log.i(TAG, "========================================")
+                Log.i(TAG, "Processing server: '$serverLabel'")
+                Log.i(TAG, "URL: $finalUrl")
+                Log.i(TAG, "========================================")
     
                 when {
-                    // ── Dailymotion: panggil LANGSUNG custom extractor ──────
-                    // JANGAN pakai loadExtractor() untuk Dailymotion karena
-                    // CS3 core Geodailymotion/Dailymotion yang ter-register di
-                    // app level bisa dipanggil duluan sebelum custom extractor kita.
-                    // Core punya bug qualities hanya key "auto" → Error 2001.
+                    // ── Dailymotion: call custom extractor directly ──────
                     "geo.dailymotion.com" in finalUrl -> {
-                        Log.d("Donghub", "▶ CustomGeoDailymotion.getUrl → $finalUrl")
+                        Log.d(TAG, "▶ CustomGeoDailymotion.getUrl")
                         geoDmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
+                        extractedCount++
                     }
-                    "dailymotion.com" in finalUrl -> {
-                        Log.d("Donghub", "▶ CustomDailymotion.getUrl → $finalUrl")
+                    "dailymotion.com" in finalUrl || "dai.ly" in finalUrl -> {
+                        Log.d(TAG, "▶ CustomDailymotion.getUrl")
                         dmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
+                        extractedCount++
                     }
     
-                    // ── DTube: loadExtractor aman karena tidak ada di core ──
-                    "d.tube" in finalUrl -> {
-                        Log.d("Donghub", "▶ loadExtractor DTube → $finalUrl")
+                    // ── DTube: loadExtractor with custom extractor ──────
+                    "d.tube" in finalUrl || "d.tube" in finalUrl.lowercase() -> {
+                        Log.d(TAG, "▶ loadExtractor DTube")
                         loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+                        extractedCount++
+                    }
+                    
+                    // ── Mega: loadExtractor with custom extractor ──────
+                    "mega.nz" in finalUrl.lowercase() || "mega.co.nz" in finalUrl.lowercase() -> {
+                        Log.d(TAG, "▶ loadExtractor Mega")
+                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+                        extractedCount++
                     }
     
-                    // ── Extractor lain (Mega, OKRU, dll) ───────────────────
+                    // ── Other extractors ───────────────────────────────
                     else -> {
-                        Log.d("Donghub", "▶ loadExtractor fallback → $finalUrl")
+                        Log.d(TAG, "▶ loadExtractor fallback")
                         loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+                        extractedCount++
                     }
                 }
     
             } catch (e: Exception) {
-                Log.e("Donghub", "error parsing server: ${e.message}")
+                Log.e(TAG, "Error parsing server: ${e.message}")
+                Log.e(TAG, "Stack trace: ${e.stackTraceToString()}")
+                skippedCount++
             }
         }
-    
+        
+        Log.i(TAG, "=== loadLinks completed ===")
+        Log.i(TAG, "Extracted: $extractedCount, Skipped: $skippedCount")
+        
         return true
+    }
+    
+    companion object {
+        private const val TAG = "Donghub"
     }
 }
