@@ -4,14 +4,14 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class DonghubProvider: Plugin() {
+class DonghubProvider : Plugin() {
     override fun load() {
         registerMainAPI(Donghub())
         registerExtractorAPI(InternetArchive())
         registerExtractorAPI(DtubeExtractor())
+        registerExtractorAPI(CustomGeoDailymotion())
+        registerExtractorAPI(CustomDailymotion())
         registerExtractorAPI(RpmvidExtractor())
         registerExtractorAPI(MegaNzExtractor())
-        //registerExtractorAPI(DonghubDailymotion())
-        //registerExtractorAPI(DonghubGeodailymotion())
     }
 }

@@ -42,6 +42,9 @@ class Donghub : MainAPI() {
         "anime/?status=&type=movie&order=" to "Movie"
     )
 
+    private val geoDmExtractor = CustomGeoDailymotion()
+    private val dmExtractor    = CustomDailymotion()
+
     private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
 
     private val indonesianMonths = mapOf(
@@ -327,29 +330,29 @@ class Donghub : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.i("Donghub", "loadLinks → $data")
-
+    
         val document = app.get(data, headers = baseHeaders).document
         val options  = document.select(".mobius option")
         Log.d("Donghub", "server options ditemukan: ${options.size}")
-
+    
         options.forEach { server ->
             val base64 = server.attr("value").trim()
             if (base64.isBlank()) return@forEach
-
+    
             try {
-                val decoded   = base64Decode(base64)
-                val iframe    = Jsoup.parse(decoded).selectFirst("iframe") ?: run {
-                    Log.w("Donghub", "tidak ada iframe di decoded: ${decoded.take(100)}")
+                val decoded  = base64Decode(base64)
+                val iframe   = Jsoup.parse(decoded).selectFirst("iframe") ?: run {
+                    Log.w("Donghub", "tidak ada iframe: ${decoded.take(100)}")
                     return@forEach
                 }
-
+    
                 val iframeSrc = iframe.attr("src")
                     .ifBlank { iframe.attr("data-src") }.trim()
                 if (iframeSrc.isBlank()) {
                     Log.w("Donghub", "iframe src kosong")
                     return@forEach
                 }
-
+    
                 val finalUrl = when {
                     iframeSrc.startsWith("http") -> iframeSrc
                     iframeSrc.startsWith("//")   -> "https:$iframeSrc"
@@ -358,17 +361,43 @@ class Donghub : MainAPI() {
                         return@forEach
                     }
                 }
-
+    
                 val serverLabel = server.text().trim().lowercase()
-                Log.i("Donghub", "🎯 server='$serverLabel'  url=$finalUrl")
-
-                Log.d("Donghub", "▶ loadExtractor → $finalUrl")
-                loadExtractor(finalUrl, data, subtitleCallback, callback)
+                Log.i("Donghub", "server='$serverLabel'  url=$finalUrl")
+    
+                when {
+                    // ── Dailymotion: panggil LANGSUNG custom extractor ──────
+                    // JANGAN pakai loadExtractor() untuk Dailymotion karena
+                    // CS3 core Geodailymotion/Dailymotion yang ter-register di
+                    // app level bisa dipanggil duluan sebelum custom extractor kita.
+                    // Core punya bug qualities hanya key "auto" → Error 2001.
+                    "geo.dailymotion.com" in finalUrl -> {
+                        Log.d("Donghub", "▶ CustomGeoDailymotion.getUrl → $finalUrl")
+                        geoDmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
+                    }
+                    "dailymotion.com" in finalUrl -> {
+                        Log.d("Donghub", "▶ CustomDailymotion.getUrl → $finalUrl")
+                        dmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
+                    }
+    
+                    // ── DTube: loadExtractor aman karena tidak ada di core ──
+                    "d.tube" in finalUrl -> {
+                        Log.d("Donghub", "▶ loadExtractor DTube → $finalUrl")
+                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+                    }
+    
+                    // ── Extractor lain (Mega, OKRU, dll) ───────────────────
+                    else -> {
+                        Log.d("Donghub", "▶ loadExtractor fallback → $finalUrl")
+                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
+                    }
+                }
+    
             } catch (e: Exception) {
-                Log.e("Donghub", "❌ error parsing server: ${e.message}")
+                Log.e("Donghub", "error parsing server: ${e.message}")
             }
         }
-
+    
         return true
     }
 }

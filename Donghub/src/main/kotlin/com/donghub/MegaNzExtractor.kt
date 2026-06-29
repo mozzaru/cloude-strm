@@ -8,13 +8,14 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.ByteArrayOutputStream
+import java.io.BufferedOutputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.nio.ByteBuffer
 import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -25,19 +26,42 @@ class MegaNzExtractor : ExtractorApi() {
     override val requiresReferer = false
 
     companion object {
-        private const val TAG       = "MegaNzExtractor"
-        private const val MEGA_API  = "https://g.api.mega.co.nz/cs"
+        private const val TAG      = "MegaNzExtractor"
+        private const val MEGA_API = "https://g.api.mega.co.nz/cs"
+
+        // FIX: Chunk 32KB — cukup kecil agar ExoPlayer dapat data cepat,
+        //      cukup besar agar AES/CTR efisien (harus kelipatan 16 bytes)
+        private const val CHUNK_SIZE = 32 * 1024
+
+        // FIX: Batas request CDN per seek — 8MB cukup untuk prefetch awal.
+        //      ExoPlayer akan range-request lagi kalau butuh lebih.
+        //      Ini mencegah CDN Mega rate-limit koneksi panjang.
+        private const val MAX_CDN_FETCH = 8L * 1024 * 1024
 
         private val httpClient by lazy {
             OkHttpClient.Builder()
                 .followRedirects(true)
-                .callTimeout(120, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)   // FIX: turunkan dari 120s
+                .readTimeout(30, TimeUnit.SECONDS)   // FIX: turunkan dari 120s
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .build()
         }
 
-        @Volatile private var activeProxy: MegaStreamProxy? = null
+        // FIX: 8 thread — 1 acceptLoop + hingga 7 concurrent client handler.
+        // ExoPlayer bisa buka 2-3 koneksi paralel (prefetch + playback + subtitle).
+        // Saat seek, koneksi lama belum tentu langsung tutup → perlu slot ekstra.
+        // ThreadFactory diberi nama agar mudah trace di logcat: "mega-proxy-N"
+        private val proxyExecutor by lazy {
+            Executors.newFixedThreadPool(8) { r ->
+                Thread(r, "mega-proxy-${System.nanoTime() % 100}").also {
+                    it.isDaemon = true
+                }
+            }
+        }
+
+        // FIX: Simpan list proxy aktif (bukan singleton) agar lama bisa stop
+        //      tanpa race condition dengan proxy baru
+        private val activeProxies = mutableListOf<MegaStreamProxy>()
 
         fun megaB64Decode(s: String): ByteArray {
             val fixed = s.replace("-", "+").replace("_", "/")
@@ -50,7 +74,9 @@ class MegaNzExtractor : ExtractorApi() {
             val buf = ByteBuffer.wrap(raw)
             val k   = IntArray(8) { buf.int }
             fun pack(vararg v: Int): ByteArray {
-                val b = ByteBuffer.allocate(v.size * 4); v.forEach { b.putInt(it) }; return b.array()
+                val b = ByteBuffer.allocate(v.size * 4)
+                v.forEach { b.putInt(it) }
+                return b.array()
             }
             val aesKey = pack(k[0] xor k[4], k[1] xor k[5], k[2] xor k[6], k[3] xor k[7])
             val ctrIv  = pack(k[4], k[5], 0, 0)
@@ -61,8 +87,8 @@ class MegaNzExtractor : ExtractorApi() {
             val enc    = megaB64Decode(encB64)
             val cipher = Cipher.getInstance("AES/CBC/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE,
-                        SecretKeySpec(aesKey, "AES"),
-                        IvParameterSpec(ByteArray(16)))
+                SecretKeySpec(aesKey, "AES"),
+                IvParameterSpec(ByteArray(16)))
             val dec  = cipher.doFinal(enc)
             val text = String(dec.takeWhile { it != 0.toByte() }.toByteArray(), Charsets.UTF_8)
             if (text.startsWith("MEGA")) {
@@ -127,7 +153,7 @@ class MegaNzExtractor : ExtractorApi() {
     }
 
     private suspend fun getFileInfo(nodeId: String): JsonObject? = try {
-        Log.d(TAG, "Fetching file info for node: $nodeId")
+        Log.d(TAG, "Fetching file info: $nodeId")
         val resp = app.post(
             "$MEGA_API?id=1",
             headers     = mapOf(
@@ -136,16 +162,10 @@ class MegaNzExtractor : ExtractorApi() {
                 "Referer"      to "https://mega.nz/"
             ),
             requestBody = """[{"a":"g","g":1,"p":"$nodeId"}]"""
-                            .toRequestBody("application/json".toMediaType())
+                .toRequestBody("application/json".toMediaType())
         )
         val arr = Json.parseToJsonElement(resp.text).jsonArray
-        if (arr.isNotEmpty() && arr[0] is JsonObject) {
-            Log.d(TAG, "File info fetched OK")
-            arr[0].jsonObject
-        } else {
-            Log.e(TAG, "Unexpected API response: ${resp.text.take(200)}")
-            null
-        }
+        if (arr.isNotEmpty() && arr[0] is JsonObject) arr[0].jsonObject else null
     } catch (e: Exception) {
         Log.e(TAG, "getFileInfo error: ${e.message}"); null
     }
@@ -156,15 +176,14 @@ class MegaNzExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d(TAG, "getUrl called → $url")
+        Log.d(TAG, "getUrl → $url")
 
         val (nodeId, fileKey) = parseUrl(url) ?: run {
             Log.e(TAG, "Cannot parse Mega URL: $url"); return
         }
-        Log.d(TAG, "Parsed → node=$nodeId  key=${fileKey.take(14)}…")
 
         val (aesKey, ctrIv) = try {
-            decodeFileKey(fileKey).also { Log.d(TAG, "AES key decoded OK") }
+            decodeFileKey(fileKey)
         } catch (e: Exception) {
             Log.e(TAG, "decodeFileKey failed: ${e.message}"); return
         }
@@ -180,7 +199,7 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         val cdnUrl   = finfo["g"]?.jsonPrimitive?.contentOrNull ?: run {
-            Log.e(TAG, "No CDN URL in response"); return
+            Log.e(TAG, "No CDN URL"); return
         }
         val encAt    = finfo["at"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val attrs    = if (encAt.isNotBlank()) decryptAttrs(encAt, aesKey) else null
@@ -190,13 +209,14 @@ class MegaNzExtractor : ExtractorApi() {
         val quality  = guessQuality(fileName, fileSize)
         val label    = qualityLabel(quality)
 
-        Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$quality")
-        Log.d(TAG, "CDN: ${cdnUrl.take(72)}…")
+        Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext")
 
-        // Tidak ada prefetch — langsung start proxy dan callback
-        // ExoPlayer akan seek sendiri untuk cari moov atom
-        activeProxy?.stop()
-        Log.d(TAG, "Old proxy stopped")
+        // FIX: Stop semua proxy lama sebelum buat baru
+        // Pakai toList() agar tidak ConcurrentModificationException
+        synchronized(activeProxies) {
+            activeProxies.toList().forEach { it.stop() }
+            activeProxies.clear()
+        }
 
         val proxy = MegaStreamProxy(
             cdnUrl   = cdnUrl,
@@ -205,13 +225,13 @@ class MegaNzExtractor : ExtractorApi() {
             fileSize = fileSize,
             ext      = ext
         )
-        val port    = proxy.start()
-        activeProxy = proxy
+        val port = proxy.start()
+
+        synchronized(activeProxies) { activeProxies.add(proxy) }
 
         val playUrl = "http://127.0.0.1:$port/video.$ext"
-        Log.i(TAG, "Proxy started on port $port → $playUrl")
+        Log.i(TAG, "Proxy port $port → $playUrl")
 
-        // Nama: "Mega" saja (default) agar tidak ada isu label
         callback.invoke(
             newExtractorLink(
                 source = name,
@@ -223,7 +243,6 @@ class MegaNzExtractor : ExtractorApi() {
                 this.referer = ""
             }
         )
-        Log.i(TAG, "ExtractorLink delivered to callback ✅")
     }
 
     private inner class MegaStreamProxy(
@@ -234,49 +253,52 @@ class MegaNzExtractor : ExtractorApi() {
         private val ext      : String
     ) {
         private var serverSocket : ServerSocket? = null
-        private val executor     = Executors.newCachedThreadPool() // FIX: pakai cached agar tidak deadlock
-        @Volatile private var running = true
-    
+        private val running      = AtomicBoolean(true)
+
+        // FIX: pakai bounded executor bersama (shared dari companion object)
+        // bukan CachedThreadPool per-proxy yang bisa OOM
         fun start(): Int {
             val ss = ServerSocket(0).also {
-                it.reuseAddress = true          // FIX: izinkan reuse port
-                it.soTimeout    = 0             // FIX: accept() tidak timeout
+                it.reuseAddress = true
+                it.soTimeout    = 0
             }
             serverSocket = ss
-            executor.submit { acceptLoop(ss) }
-            Log.d(TAG, "Proxy accept loop started on port ${ss.localPort}")
+            proxyExecutor.submit { acceptLoop(ss) }
+            Log.d(TAG, "Proxy started on port ${ss.localPort}")
             return ss.localPort
         }
-    
+
         fun stop() {
-            running = false
+            running.set(false)
             try { serverSocket?.close() } catch (_: Exception) {}
-            executor.shutdownNow()
             Log.d(TAG, "Proxy stopped")
         }
-    
+
         private fun acceptLoop(ss: ServerSocket) {
-            while (running) {
+            while (running.get()) {
                 try {
                     val client = ss.accept()
-                    client.tcpNoDelay = true     // FIX: kurangi latency
-                    Log.d(TAG, "New client: ${client.inetAddress}")
-                    executor.submit { handleClient(client) }
+                    client.tcpNoDelay  = true
+                    // FIX: soTimeout 60s — kalau ExoPlayer disconnect tanpa close,
+                    //      thread tidak hang selamanya dan pool tidak exhausted.
+                    //      Pool exhausted = semua request baru timeout = ERROR 2001.
+                    client.soTimeout   = 60_000
+                    proxyExecutor.submit { handleClient(client) }
                 } catch (_: Exception) { break }
             }
         }
-    
+
         private fun handleClient(client: java.net.Socket) {
             try {
-                client.soTimeout = 0             // FIX: jangan timeout saat streaming
                 client.use { sock ->
-                    val inputStream = sock.getInputStream()
-                    val reader      = inputStream.bufferedReader(Charsets.US_ASCII)
-                    val output      = sock.getOutputStream()
-    
+                    val reader = sock.getInputStream().bufferedReader(Charsets.US_ASCII)
+                    // FIX: Pakai BufferedOutputStream 64KB — kurangi syscall write()
+                    // Lebih cepat daripada flush() tiap chunk kecil
+                    val output = BufferedOutputStream(sock.getOutputStream(), 65536)
+
                     val requestLine = reader.readLine() ?: return
                     Log.d(TAG, "Request: $requestLine")
-    
+
                     val headers = mutableMapOf<String, String>()
                     while (true) {
                         val line = reader.readLine() ?: break
@@ -286,33 +308,31 @@ class MegaNzExtractor : ExtractorApi() {
                             headers[line.substring(0, idx).trim().lowercase()] =
                                 line.substring(idx + 1).trim()
                     }
-    
+
                     val method = requestLine.substringBefore(" ").uppercase()
                     if (method == "HEAD") {
-                        sendResponseHeaders(
-                            output, 200, fileSize,
+                        sendResponseHeaders(output, 200, fileSize,
                             0L, if (fileSize > 0) fileSize - 1 else 0L,
-                            fileSize, false
-                        )
+                            fileSize, false)
                         output.flush()
                         return
                     }
-    
+
                     val rangeHeader = headers["range"]
                     val (rangeStart, rangeEnd) = parseRange(rangeHeader, fileSize)
                     val contentLength = if (fileSize > 0 && rangeEnd >= 0)
                         rangeEnd - rangeStart + 1 else -1L
-    
-                    Log.d(TAG, "Range: $rangeStart-$rangeEnd  contentLength=$contentLength")
+
+                    Log.d(TAG, "Range: $rangeStart-$rangeEnd  len=$contentLength")
                     streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "handleClient error: ${e.message}")
             }
         }
-    
+
         private fun streamFromCdn(
-            output        : OutputStream,
+            output        : BufferedOutputStream,
             rangeHeader   : String?,
             rangeStart    : Long,
             rangeEnd      : Long,
@@ -323,41 +343,75 @@ class MegaNzExtractor : ExtractorApi() {
             val cdnFrom     = blockStart * 16
             val adjustedIv  = incrementIv(ctrIv, blockStart)
 
-            // FIX: Jika fileSize tidak diketahui, jangan tambahkan batas atas range
-            val cdnRangeHdr = if (fileSize > 0) "bytes=$cdnFrom-${fileSize - 1}"
-                              else              "bytes=$cdnFrom-"
+            // FIX: Cap CDN range ke MAX_CDN_FETCH per request
+            // Sebelumnya: selalu minta bytes=cdnFrom-${fileSize-1} (seluruh sisa file)
+            // → CDN Mega rate-limit koneksi panjang → buffering
+            // ExoPlayer akan Range request lagi untuk chunk berikutnya otomatis
+            // FIX: cdnTo harus = rangeEnd (dibulatkan ke batas block 16B) + lookahead 8MB.
+            // Formula lama: cdnFrom + blockOffset + contentLength + 8MB
+            //   → double-count: cdnFrom sudah = blockStart*16, lalu ditambah blockOffset lagi
+            //   → cdnTo bisa LEBIH BESAR dari fileSize → CDN return 416 → ERROR 2001.
+            // Formula baru: mulai dari rangeEnd (batas atas yang ExoPlayer minta),
+            //   bulatkan ke atas ke kelipatan 16, lalu tambah lookahead MAX_CDN_FETCH.
+            val alignedRangeEnd = if (rangeEnd > 0) {
+                val nextBlock = ((rangeEnd / 16) + 1) * 16 - 1
+                nextBlock
+            } else {
+                cdnFrom + MAX_CDN_FETCH - 1
+            }
+            val cdnTo = when {
+                fileSize > 0 -> (alignedRangeEnd + MAX_CDN_FETCH).coerceAtMost(fileSize - 1)
+                else         -> alignedRangeEnd + MAX_CDN_FETCH
+            }
+            val cdnRangeHdr = "bytes=$cdnFrom-$cdnTo"
 
-            Log.d(TAG, "AES seek → block=$blockStart  skip=$blockOffset  cdnFrom=$cdnFrom")
+            Log.d(TAG, "CDN range → $cdnRangeHdr  (blockOffset=$blockOffset)")
 
             val cdnReq = Request.Builder()
                 .url(cdnUrl)
                 .header("User-Agent",
                     "Mozilla/5.0 (Linux; Android 10; K) " +
-                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/124.0.0.0 Mobile Safari/537.36")
+                    "AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
                 .header("Origin",  "https://mega.nz")
                 .header("Referer", "https://mega.nz/")
                 .header("Range",   cdnRangeHdr)
                 .build()
 
-            Log.d(TAG, "CDN request → Range: $cdnRangeHdr")
-
-            val cdnResp = try {
+            // FIX: Retry CDN 1x (delay 1s) — network hiccup sesaat tidak langsung
+            // return error 502 ke ExoPlayer yang langsung trigger ERROR_CODE 2001.
+            var cdnResp = try {
                 httpClient.newCall(cdnReq).execute()
             } catch (e: Exception) {
-                Log.e(TAG, "CDN request failed: ${e.message}")
-                sendError(output, 502)
-                return
+                Log.w(TAG, "CDN attempt 1 failed: ${e.message}, retrying…")
+                Thread.sleep(1000)
+                try {
+                    httpClient.newCall(cdnReq).execute()
+                } catch (e2: Exception) {
+                    Log.e(TAG, "CDN attempt 2 failed: ${e2.message}")
+                    sendError(output, 502)
+                    return
+                }
             }
 
             Log.d(TAG, "CDN response: ${cdnResp.code}")
 
-            // FIX: Terima 200 dan 206
             if (cdnResp.code !in listOf(200, 206)) {
-                Log.e(TAG, "CDN returned ${cdnResp.code}")
-                sendError(output, 502)
+                Log.w(TAG, "CDN returned ${cdnResp.code}, retrying once…")
                 cdnResp.close()
-                return
+                Thread.sleep(1000)
+                cdnResp = try {
+                    httpClient.newCall(cdnReq).execute()
+                } catch (e: Exception) {
+                    Log.e(TAG, "CDN retry failed: ${e.message}")
+                    sendError(output, 502)
+                    return
+                }
+                if (cdnResp.code !in listOf(200, 206)) {
+                    Log.e(TAG, "CDN returned ${cdnResp.code} after retry")
+                    sendError(output, 502)
+                    cdnResp.close()
+                    return
+                }
             }
 
             val body = cdnResp.body ?: run {
@@ -366,12 +420,14 @@ class MegaNzExtractor : ExtractorApi() {
                 return
             }
 
-            val isPartial = rangeHeader != null
-            sendResponseHeaders(
-                output,
+            // FIX: isPartial harus ikut status CDN, bukan hanya ada/tidak Range header.
+            // Kalau CDN return 200 (tidak support range), kita juga harus return 200,
+            // atau ExoPlayer akan reject Content-Range yang tidak konsisten → ERROR 2001.
+            val cdnIsPartial = cdnResp.code == 206
+            val isPartial    = rangeHeader != null && cdnIsPartial
+            sendResponseHeaders(output,
                 if (isPartial) 206 else 200,
-                contentLength, rangeStart, rangeEnd, fileSize, isPartial
-            )
+                contentLength, rangeStart, rangeEnd, fileSize, isPartial)
 
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
             cipher.init(
@@ -381,10 +437,18 @@ class MegaNzExtractor : ExtractorApi() {
             )
 
             val encStream = body.byteStream()
-            val buf       = ByteArray(131072)  // FIX: 128KB buffer lebih efisien
+            // FIX: Buffer 32KB — kelipatan 16 (AES block), cukup kecil agar
+            //      ExoPlayer dapat data cepat tanpa nunggu chunk besar selesai
+            val buf       = ByteArray(CHUNK_SIZE)
             var toSkip    = blockOffset
             var remaining = contentLength
             var totalSent = 0L
+
+            // FIX: Track flush setiap 256KB — tidak perlu flush tiap 32KB chunk
+            //      (BufferedOutputStream sudah handle buffer, flush terlalu sering
+            //       justru memperlambat karena banyak syscall)
+            var bytesSinceFlush = 0L
+            val FLUSH_EVERY     = 256 * 1024L
 
             try {
                 while (remaining != 0L) {
@@ -395,31 +459,45 @@ class MegaNzExtractor : ExtractorApi() {
                     val n = encStream.read(buf, 0, want)
                     if (n <= 0) break
 
-                    // FIX: Tangani null dari cipher.update() dengan benar
-                    val dec = cipher.update(buf, 0, n)
-                    if (dec == null || dec.isEmpty()) continue
+                    val dec = cipher.update(buf, 0, n) ?: continue
+                    if (dec.isEmpty()) continue
 
-                    val writeData: ByteArray = if (toSkip > 0) {
-                        val from = minOf(toSkip, dec.size)
-                        toSkip = maxOf(0, toSkip - dec.size)
-                        if (from < dec.size) dec.copyOfRange(from, dec.size)
-                        else ByteArray(0)
+                    val writeFrom: Int
+                    val writeData: ByteArray
+                    if (toSkip > 0) {
+                        val skip = minOf(toSkip, dec.size)
+                        toSkip -= skip
+                        if (skip >= dec.size) continue
+                        writeFrom = skip
+                        writeData = dec
                     } else {
-                        dec
+                        writeFrom = 0
+                        writeData = dec
                     }
 
-                    if (writeData.isEmpty()) continue
+                    val available = dec.size - writeFrom
+                    val toWrite   = if (remaining > 0)
+                        minOf(available.toLong(), remaining).toInt()
+                    else available
 
-                    val toWrite = if (remaining > 0)
-                        writeData.copyOf(minOf(writeData.size.toLong(), remaining).toInt())
-                    else writeData
+                    if (toWrite <= 0) continue
 
-                    output.write(toWrite)
-                    output.flush()             // FIX: flush per chunk agar ExoPlayer tidak timeout
-                    totalSent += toWrite.size
-                    if (remaining > 0) remaining -= toWrite.size
+                    output.write(writeData, writeFrom, toWrite)
+                    totalSent       += toWrite
+                    bytesSinceFlush += toWrite
+                    if (remaining > 0) remaining -= toWrite
+
+                    // FIX: Flush setiap 256KB bukan setiap chunk
+                    if (bytesSinceFlush >= FLUSH_EVERY) {
+                        output.flush()
+                        bytesSinceFlush = 0
+                    }
                 }
+
+                // Flush sisa data di buffer
+                output.flush()
                 Log.d(TAG, "Stream done — sent ${totalSent / 1024} KB")
+
             } catch (e: java.io.IOException) {
                 Log.d(TAG, "Client disconnected after ${totalSent / 1024} KB: ${e.message}")
             } finally {
@@ -438,7 +516,7 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun sendResponseHeaders(
-            out: OutputStream, statusCode: Int, contentLength: Long,
+            out: BufferedOutputStream, statusCode: Int, contentLength: Long,
             rangeStart: Long, rangeEnd: Long, total: Long, isPartial: Boolean
         ) {
             val mime   = when (ext) {
@@ -452,16 +530,16 @@ class MegaNzExtractor : ExtractorApi() {
             sb.append("Content-Type: $mime\r\n")
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Connection: keep-alive\r\n")
-            // FIX: Selalu kirim Content-Length jika diketahui
             if (contentLength > 0) sb.append("Content-Length: $contentLength\r\n")
             if (isPartial && total > 0)
                 sb.append("Content-Range: bytes $rangeStart-$rangeEnd/$total\r\n")
             sb.append("\r\n")
             out.write(sb.toString().toByteArray(Charsets.US_ASCII))
+            // Headers langsung flush agar ExoPlayer tidak nunggu
             out.flush()
         }
 
-        private fun sendError(out: OutputStream, code: Int) {
+        private fun sendError(out: BufferedOutputStream, code: Int) {
             try {
                 out.write(
                     "HTTP/1.1 $code Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
