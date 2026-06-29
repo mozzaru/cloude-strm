@@ -164,7 +164,7 @@ open class CustomDailymotion : ExtractorApi() {
                             source = name,
                             // Eksplisit include qualityLabel di name supaya
                             // CloudStream tidak dobel-append quality label lagi
-                            name   = "$name $qualityLabel",
+                            name   = "$name",
                             url    = variant.url,
                             type   = ExtractorLinkType.M3U8
                         ) {
