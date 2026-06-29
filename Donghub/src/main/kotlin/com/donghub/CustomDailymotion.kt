@@ -147,7 +147,14 @@ open class CustomDailymotion : ExtractorApi() {
 
             if (variants.isNotEmpty()) {
                 Log.i(TAG, "Sending ${variants.size} individual variant tracks")
-                for (variant in variants) {
+                // Deduplicate: keep highest-bandwidth variant per quality level
+                // to avoid duplicate "Dailymotion 1080p 1080p" entries
+                val bestVariants = variants
+                    .groupBy { resolutionToQuality(it.resolution) }
+                    .mapValues { (_, list) -> list.maxByOrNull { it.bandwidth }!! }
+                    .values.sortedByDescending { it.bandwidth }
+
+                for (variant in bestVariants) {
                     val qualityInt   = resolutionToQuality(variant.resolution)
                     val qualityLabel = qualityIntToLabel(qualityInt)
                     Log.d(TAG, "  Variant: ${variant.bandwidth}bps res=${variant.resolution} → $qualityLabel")
@@ -155,7 +162,9 @@ open class CustomDailymotion : ExtractorApi() {
                     callback.invoke(
                         newExtractorLink(
                             source = name,
-                            name   = name,
+                            // Eksplisit include qualityLabel di name supaya
+                            // CloudStream tidak dobel-append quality label lagi
+                            name   = "$name $qualityLabel",
                             url    = variant.url,
                             type   = ExtractorLinkType.M3U8
                         ) {

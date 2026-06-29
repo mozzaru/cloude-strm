@@ -56,6 +56,18 @@ class MegaNzExtractor : ExtractorApi() {
         // Active proxies list for cleanup
         private val activeProxies = mutableListOf<MegaStreamProxy>()
 
+        /**
+         * Stop semua proxy Mega yang aktif.
+         * Dipanggil dari extractor lain (DTube, dll) sebelum mulai stream baru
+         * supaya tidak ada konflik state yang menyebabkan DECODER_INIT_FAILED.
+         */
+        fun stopAll() {
+            synchronized(activeProxies) {
+                activeProxies.toList().forEach { it.stop() }
+                activeProxies.clear()
+            }
+        }
+
         fun megaB64Decode(s: String): ByteArray {
             val fixed = s.replace("-", "+").replace("_", "/")
             val pad   = (4 - fixed.length % 4) % 4
@@ -265,10 +277,12 @@ class MegaNzExtractor : ExtractorApi() {
         val playUrl = "http://127.0.0.1:$port/video.$ext"
         Log.i(TAG, "Proxy started on port $port -> $playUrl")
 
+        // Eksplisit include qualityLabel di name supaya CloudStream
+        // tidak dobel-append quality label → "Mega 1080p" bukan "Mega 1080p 1080p"
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = name,
+                name   = "$name $label",
                 url    = playUrl,
                 type   = ExtractorLinkType.VIDEO
             ) {
