@@ -21,12 +21,12 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class MegaNzExtractor : ExtractorApi() {
-    override val name            = "Mega"
-    override val mainUrl         = "https://mega.nz"
+    override val name = "Mega"
+    override val mainUrl = "https://mega.nz"
     override val requiresReferer = false
 
     companion object {
-        private const val TAG      = "MegaNzExtractor"
+        private const val TAG = "MegaNzExtractor"
         private const val MEGA_API = "https://g.api.mega.co.nz/cs"
         
         // Chunk 32KB - small enough for ExoPlayer to get data quickly
@@ -77,24 +77,24 @@ class MegaNzExtractor : ExtractorApi() {
         fun decodeFileKey(b64key: String): Pair<ByteArray, ByteArray> {
             val raw = megaB64Decode(b64key)
             val buf = ByteBuffer.wrap(raw)
-            val k   = IntArray(8) { buf.int }
+            val k = IntArray(8) { buf.int }
             fun pack(vararg v: Int): ByteArray {
                 val b = ByteBuffer.allocate(v.size * 4)
                 v.forEach { b.putInt(it) }
                 return b.array()
             }
             val aesKey = pack(k[0] xor k[4], k[1] xor k[5], k[2] xor k[6], k[3] xor k[7])
-            val ctrIv  = pack(k[4], k[5], 0, 0)
+            val ctrIv = pack(k[4], k[5], 0, 0)
             return Pair(aesKey, ctrIv)
         }
 
         fun decryptAttrs(encB64: String, aesKey: ByteArray): Map<String, String>? = try {
-            val enc    = megaB64Decode(encB64)
+            val enc = megaB64Decode(encB64)
             val cipher = Cipher.getInstance("AES/CBC/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE,
                 SecretKeySpec(aesKey, "AES"),
                 IvParameterSpec(ByteArray(16)))
-            val dec  = cipher.doFinal(enc)
+            val dec = cipher.doFinal(enc)
             val text = String(dec.takeWhile { it != 0.toByte() }.toByteArray(), Charsets.UTF_8)
             if (text.startsWith("MEGA")) {
                 val json = Json.parseToJsonElement(text.removePrefix("MEGA"))
@@ -106,7 +106,7 @@ class MegaNzExtractor : ExtractorApi() {
 
         fun incrementIv(iv: ByteArray, delta: Long): ByteArray {
             val result = iv.copyOf()
-            var carry  = delta
+            var carry = delta
             for (i in 15 downTo 0) {
                 val sum = (result[i].toLong() and 0xFF) + (carry and 0xFF)
                 result[i] = sum.toByte()
@@ -151,9 +151,9 @@ class MegaNzExtractor : ExtractorApi() {
     }
 
     private fun parseUrl(url: String): Pair<String, String>? {
-        val norm    = normaliseUrl(url)
-        val path    = norm.removePrefix("$mainUrl/file/")
-        val nodeId  = path.substringBefore("#")
+        val norm = normaliseUrl(url)
+        val path = norm.removePrefix("$mainUrl/file/")
+        val nodeId = path.substringBefore("#")
         val fileKey = path.substringAfter("#", "")
         
         Log.d(TAG, "Parse result - nodeId: ${nodeId.take(20)}..., fileKey: ${fileKey.take(20)}...")
@@ -170,7 +170,7 @@ class MegaNzExtractor : ExtractorApi() {
         Log.d(TAG, "Fetching file info for: $nodeId")
         val resp = app.post(
             "$MEGA_API?id=1",
-            headers     = mapOf(
+            headers = mapOf(
                 "Content-Type" to "application/json",
                 "Origin"       to "https://mega.nz",
                 "Referer"      to "https://mega.nz/"
@@ -228,7 +228,7 @@ class MegaNzExtractor : ExtractorApi() {
             Log.i(TAG, "Returning fallback URL: $fallbackUrl")
             callback.invoke(newExtractorLink(
                 source = name, 
-                name = name,
+                name = "$name",
                 url = fallbackUrl, 
                 type = ExtractorLinkType.VIDEO
             ) {
@@ -244,13 +244,13 @@ class MegaNzExtractor : ExtractorApi() {
             return
         }
         
-        val encAt    = finfo["at"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val attrs    = if (encAt.isNotBlank()) decryptAttrs(encAt, aesKey) else null
+        val encAt = finfo["at"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val attrs = if (encAt.isNotBlank()) decryptAttrs(encAt, aesKey) else null
         val fileName = attrs?.get("n").orEmpty().ifBlank { "video.mp4" }
         val fileSize = finfo["s"]?.jsonPrimitive?.longOrNull ?: -1L
-        val ext      = fileName.substringAfterLast(".", "mp4").lowercase()
-        val quality  = guessQuality(fileName, fileSize)
-        val label    = qualityLabel(quality)
+        val ext = fileName.substringAfterLast(".", "mp4").lowercase()
+        val quality = guessQuality(fileName, fileSize)
+        val label = qualityLabel(quality)
 
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$label")
         Log.d(TAG, "CDN URL: ${cdnUrl.take(80)}...")
@@ -263,12 +263,12 @@ class MegaNzExtractor : ExtractorApi() {
 
         Log.d(TAG, "Starting proxy server...")
         val proxy = MegaStreamProxy(
-            nodeId   = nodeId,
-            cdnUrl   = cdnUrl,
-            aesKey   = aesKey,
-            ctrIv    = ctrIv,
+            nodeId = nodeId,
+            cdnUrl = cdnUrl,
+            aesKey = aesKey,
+            ctrIv = ctrIv,
             fileSize = fileSize,
-            ext      = ext
+            ext = ext
         )
         val port = proxy.start()
 
@@ -277,14 +277,12 @@ class MegaNzExtractor : ExtractorApi() {
         val playUrl = "http://127.0.0.1:$port/video.$ext"
         Log.i(TAG, "Proxy started on port $port -> $playUrl")
 
-        // Eksplisit include qualityLabel di name supaya CloudStream
-        // tidak dobel-append quality label → "Mega 1080p" bukan "Mega 1080p 1080p"
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name   = "$name $label",
-                url    = playUrl,
-                type   = ExtractorLinkType.VIDEO
+                name = "$name",
+                url = playUrl,
+                type = ExtractorLinkType.VIDEO
             ) {
                 this.quality = quality
                 this.referer = ""
@@ -295,14 +293,14 @@ class MegaNzExtractor : ExtractorApi() {
     }
 
     private inner class MegaStreamProxy(
-        private val nodeId   : String,
-        @Volatile private var cdnUrl: String,
-        private val aesKey   : ByteArray,
-        private val ctrIv    : ByteArray,
+        private val nodeId : String,
+        @Volatile private var cdnUrl : String,
+        private val aesKey : ByteArray,
+        private val ctrIv : ByteArray,
         private val fileSize : Long,
-        private val ext      : String
+        private val ext : String
     ) {
-        private var serverSocket: ServerSocket? = null
+        private var serverSocket : ServerSocket? = null
         private val stopped = AtomicBoolean(false)
         
         fun start(): Int {
@@ -342,7 +340,7 @@ class MegaNzExtractor : ExtractorApi() {
         
         private fun handleClient(client: java.net.Socket) {
             try {
-                val input  = client.getInputStream().bufferedReader()
+                val input = client.getInputStream().bufferedReader()
                 val output = BufferedOutputStream(client.getOutputStream())
                 
                 val requestLine = input.readLine() ?: return
@@ -368,16 +366,16 @@ class MegaNzExtractor : ExtractorApi() {
         }
 
         private fun streamFromCdn(
-            output        : BufferedOutputStream,
-            rangeHeader   : String?,
-            rangeStart    : Long,
-            rangeEnd      : Long,
+            output : BufferedOutputStream,
+            rangeHeader : String?,
+            rangeStart : Long,
+            rangeEnd : Long,
             contentLength : Long
         ) {
-            val blockStart  = rangeStart / 16
+            val blockStart = rangeStart / 16
             val blockOffset = (rangeStart % 16).toInt()
-            val cdnFrom     = blockStart * 16
-            val adjustedIv  = incrementIv(ctrIv, blockStart)
+            val cdnFrom = blockStart * 16
+            val adjustedIv = incrementIv(ctrIv, blockStart)
 
             // Jika rangeEnd eksplisit (ExoPlayer probe/seek), align ke block
             // boundary berikutnya saja — jangan tambah MAX_CDN_FETCH ekstra
@@ -399,7 +397,7 @@ class MegaNzExtractor : ExtractorApi() {
                 .url(cdnUrl)
                 .header("User-Agent",
                     "Mozilla/5.0 (Linux; Android 10; K) " +
-                    "AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
+                    "AppleWebKit/537.36 Chrome/149.0.0.0 Mobile Safari/537.36")
                 .header("Origin",  "https://mega.nz")
                 .header("Referer", "https://mega.nz/")
                 .header("Range",   cdnRangeHdr)
@@ -454,7 +452,7 @@ class MegaNzExtractor : ExtractorApi() {
                     .url(freshCdnUrl)
                     .header("User-Agent",
                         "Mozilla/5.0 (Linux; Android 10; K) " +
-                        "AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
+                        "AppleWebKit/537.36 Chrome/149.0.0.0 Mobile Safari/537.36")
                     .header("Origin",  "https://mega.nz")
                     .header("Referer", "https://mega.nz/")
                     .header("Range",   cdnRangeHdr)
@@ -499,13 +497,13 @@ class MegaNzExtractor : ExtractorApi() {
             )
 
             val encStream = body.byteStream()
-            val buf       = ByteArray(CHUNK_SIZE)
-            var toSkip    = blockOffset
+            val buf = ByteArray(CHUNK_SIZE)
+            var toSkip = blockOffset
             var remaining = contentLength
             var totalSent = 0L
 
             var bytesSinceFlush = 0L
-            val FLUSH_EVERY     = 256 * 1024L
+            val FLUSH_EVERY = 256 * 1024L
 
             try {
                 while (remaining != 0L) {
@@ -533,7 +531,7 @@ class MegaNzExtractor : ExtractorApi() {
                     }
 
                     val available = dec.size - writeFrom
-                    val toWrite   = if (remaining > 0)
+                    val toWrite = if (remaining > 0)
                         minOf(available.toLong(), remaining).toInt()
                     else available
 
@@ -574,13 +572,13 @@ class MegaNzExtractor : ExtractorApi() {
             out: BufferedOutputStream, statusCode: Int, contentLength: Long,
             rangeStart: Long, rangeEnd: Long, total: Long, isPartial: Boolean
         ) {
-            val mime   = when (ext) {
-                "mkv"  -> "video/x-matroska"
+            val mime = when (ext) {
+                "mkv" -> "video/x-matroska"
                 "webm" -> "video/webm"
-                else   -> "video/mp4"
+                else -> "video/mp4"
             }
             val status = if (statusCode == 206) "206 Partial Content" else "200 OK"
-            val sb     = StringBuilder()
+            val sb = StringBuilder()
             sb.append("HTTP/1.1 $status\r\n")
             sb.append("Content-Type: $mime\r\n")
             sb.append("Accept-Ranges: bytes\r\n")

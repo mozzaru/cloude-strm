@@ -21,9 +21,9 @@ import com.donghub.MegaNzExtractor
  * - Fallback URLs for resilience
  */
 open class DtubeExtractor : ExtractorApi() {
-    override var mainUrl         = "https://play.d.tube"
+    override var mainUrl = "https://play.d.tube"
     override val requiresReferer = true
-    override var name            = "DTube"
+    override var name = "DTube"
 
     companion object {
         private const val TAG = "DtubeExtractor"
@@ -106,7 +106,7 @@ open class DtubeExtractor : ExtractorApi() {
         val headers = mapOf(
             "Referer"         to correctReferer,
             "Origin"          to mainUrl,
-            "User-Agent"      to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
+            "User-Agent"      to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
             "Accept"          to "*/*",
             "Accept-Language" to "id-ID,id;q=0.9,en;q=0.8",
         )
@@ -144,9 +144,9 @@ open class DtubeExtractor : ExtractorApi() {
                     callback(
                         newExtractorLink(
                             source = name,
-                            name   = "$name ($label)",
-                            url    = m3u8Url,
-                            type   = ExtractorLinkType.M3U8
+                            name = "$name",
+                            url = m3u8Url,
+                            type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = Qualities.Unknown.value
                             this.referer = correctReferer
@@ -183,9 +183,9 @@ open class DtubeExtractor : ExtractorApi() {
                     callback(
                         newExtractorLink(
                             source = name,
-                            name   = "$name (direct)",
-                            url    = directUrl,
-                            type   = ExtractorLinkType.M3U8
+                            name = "$name",
+                            url = directUrl,
+                            type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = Qualities.Unknown.value
                             this.referer = correctReferer

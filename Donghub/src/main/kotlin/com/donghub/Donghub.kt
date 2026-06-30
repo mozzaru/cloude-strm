@@ -13,7 +13,7 @@ class Donghub : MainAPI() {
     override val hasMainPage = true
 
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9",
         "Cache-Control" to "no-cache, no-store, must-revalidate",
@@ -342,146 +342,73 @@ class Donghub : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.i(TAG, "=== loadLinks called ===")
-        Log.d(TAG, "Data URL: $data")
-    
+        Log.i(TAG, "=== loadLinks called === URL: $data")
+
         val document = app.get(data, headers = baseHeaders).document
-        val options  = document.select(".mobius option")
-        
+        val options = document.select(".mobius option")
+
         Log.i(TAG, "Server options found: ${options.size}")
-        
-        // Log all server options for debugging
-        options.forEachIndexed { index, option ->
-            val serverName = option.text().trim()
-            val optionValue = option.attr("value")
-            Log.d(TAG, "Server [$index]: name='$serverName', value_len=${optionValue.length}")
-        }
-    
-        if (options.isEmpty()) {
-            Log.w(TAG, "NO server options found on page!")
-            // Try to find iframes directly
-            val iframes = document.select("iframe")
-            Log.d(TAG, "Direct iframes found: ${iframes.size}")
-            iframes.forEachIndexed { index, iframe ->
-                val src = iframe.attr("src")
-                Log.d(TAG, "  Iframe [$index]: $src")
-            }
-        }
-    
-        var extractedCount = 0
-        var skippedCount = 0
-        
-        options.forEach { server ->
+
+        document.select(".mobius option").amap { server ->
+            val serverLabel = server.text().trim()
             val base64 = server.attr("value").trim()
+
             if (base64.isBlank()) {
-                Log.w(TAG, "Empty option value, skipping")
-                skippedCount++
-                return@forEach
+                Log.w(TAG, "[$serverLabel] Skipped — base64 blank")
+                return@amap
             }
-    
-            try {
-                Log.d(TAG, "Decoding server option...")
-                val decoded  = base64Decode(base64)
-                
-                if (decoded.isBlank()) {
-                    Log.w(TAG, "Decoded string is empty")
-                    skippedCount++
-                    return@forEach
-                }
-                
-                Log.d(TAG, "Decoded length: ${decoded.length} chars")
-                Log.d(TAG, "Decoded preview: ${decoded.take(150)}...")
-                
-                val iframe   = Jsoup.parse(decoded).selectFirst("iframe") ?: run {
-                    Log.w(TAG, "No iframe found in decoded content")
-                    // Try looking for other video sources
-                    val videoSrc = Jsoup.parse(decoded).selectFirst("video source")?.attr("src")
-                    if (videoSrc != null) {
-                        Log.d(TAG, "Found video source: $videoSrc")
-                        callback.invoke(newExtractorLink(
-                            source = "DirectVideo",
-                            name   = "Direct Video",
-                            url    = videoSrc,
-                            type   = ExtractorLinkType.VIDEO
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.referer = data
-                        })
-                        extractedCount++
-                    }
-                    return@forEach
-                }
-    
-                val iframeSrc = iframe.attr("src")
-                    .ifBlank { iframe.attr("data-src") }.trim()
-                if (iframeSrc.isBlank()) {
-                    Log.w(TAG, "Iframe src is blank")
-                    skippedCount++
-                    return@forEach
-                }
-    
-                val finalUrl = when {
-                    iframeSrc.startsWith("http") -> iframeSrc
-                    iframeSrc.startsWith("//")   -> "https:$iframeSrc"
-                    else -> {
-                        Log.w(TAG, "Invalid URL format: $iframeSrc")
-                        return@forEach
-                    }
-                }
-    
-                val serverLabel = server.text().trim()
-                Log.i(TAG, "========================================")
-                Log.i(TAG, "Label: '$serverLabel'  →  URL: $finalUrl")
-                Log.i(TAG, "========================================")
-    
-                when {
-                    // ── Dailymotion ──────────────────────────────────────
-                    "geo.dailymotion.com" in finalUrl -> {
-                        Log.d(TAG, "▶ CustomGeoDailymotion.getUrl")
-                        geoDmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
-                        extractedCount++
-                    }
-                    "dailymotion.com" in finalUrl || "dai.ly" in finalUrl -> {
-                        Log.d(TAG, "▶ CustomDailymotion.getUrl")
-                        dmExtractor.getUrl(finalUrl, finalUrl, subtitleCallback, callback)
-                        extractedCount++
-                    }
 
-                    // ── Mega ─────────────────────────────────────────────
-                    "mega.nz" in finalUrl || "mega.co.nz" in finalUrl -> {
-                        Log.d(TAG, "▶ MegaNzExtractor.getUrl  url=$finalUrl")
-                        megaExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
-                        extractedCount++
-                    }
+            val decoded = base64Decode(base64)
+            if (decoded.isBlank()) {
+                Log.w(TAG, "[$serverLabel] Skipped — decode result blank")
+                return@amap
+            }
 
-                    // ── DTube ────────────────────────────────────────────
-                    "d.tube" in finalUrl -> {
-                        Log.d(TAG, "▶ DtubeExtractor.getUrl  url=$finalUrl")
-                        dtubeExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
-                        extractedCount++
-                    }
-    
-                    // ── Other extractors ─────────────────────────────────
-                    else -> {
-                        Log.d(TAG, "▶ loadExtractor fallback  url=$finalUrl")
-                        loadExtractor(finalUrl, finalUrl, subtitleCallback, callback)
-                        extractedCount++
-                    }
+            val doc = Jsoup.parse(decoded)
+
+            val src = doc.selectFirst("iframe")
+                ?.attr("src").orEmpty()
+                .ifBlank { 
+                    Log.d(TAG, "[$serverLabel] No iframe, fallback to video source")
+                    doc.selectFirst("video source")?.attr("src").orEmpty() 
                 }
-    
-            } catch (e: Exception) {
-                Log.e(TAG, "Error parsing server: ${e.message}")
-                Log.e(TAG, "Stack trace: ${e.stackTraceToString()}")
-                skippedCount++
+
+            if (src.isBlank()) {
+                Log.w(TAG, "[$serverLabel] Skipped — no src found")
+                return@amap
+            }
+
+            val finalUrl = when {
+                src.startsWith("http") -> src
+                src.startsWith("//")   -> "https:$src"
+                else -> {
+                    Log.w(TAG, "[$serverLabel] Skipped — invalid URL format: $src")
+                    return@amap
+                }
+            }
+
+            Log.i(TAG, "[$serverLabel] → $finalUrl")
+
+            when {
+                "geo.dailymotion.com" in finalUrl -> {
+                    Log.d(TAG, "[$serverLabel] ▶ CustomGeoDailymotion")
+                    geoDmExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
+                }
+                "dailymotion.com" in finalUrl || "dai.ly" in finalUrl -> {
+                    Log.d(TAG, "[$serverLabel] ▶ CustomDailymotion")
+                    dmExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
+                }
+                else -> {
+                    Log.d(TAG, "[$serverLabel] ▶ loadExtractor")
+                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+                }
             }
         }
-        
-        Log.i(TAG, "=== loadLinks completed ===")
-        Log.i(TAG, "Extracted: $extractedCount, Skipped: $skippedCount")
-        
+
+        Log.i(TAG, "=== loadLinks done ===")
         return true
     }
-    
+
     companion object {
         private const val TAG = "Donghub"
     }

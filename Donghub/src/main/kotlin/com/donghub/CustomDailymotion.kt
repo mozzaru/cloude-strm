@@ -50,18 +50,18 @@ private data class HlsVariant(
 // ── geo.dailymotion.com handler ───────────────────────────────
 
 class CustomGeoDailymotion : CustomDailymotion() {
-    override val name    = "Dailymotion"
+    override val name = "Dailymotion"
     override val mainUrl = "https://geo.dailymotion.com"
 }
 
 // ── www.dailymotion.com handler ───────────────────────────────
 
 open class CustomDailymotion : ExtractorApi() {
-    override val name            = "Dailymotion"
-    override val mainUrl         = "https://www.dailymotion.com"
+    override val name = "Dailymotion"
+    override val mainUrl = "https://www.dailymotion.com"
     override val requiresReferer = false
 
-    private val baseUrl      = "https://www.dailymotion.com"
+    private val baseUrl = "https://www.dailymotion.com"
     private val videoIdRegex = Regex("^[kx][a-zA-Z0-9]+$")
 
     override suspend fun getUrl(
@@ -131,9 +131,9 @@ open class CustomDailymotion : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = "$name Auto",
-                    url    = masterM3u8Url,
-                    type   = ExtractorLinkType.M3U8
+                    name = "$name",
+                    url = masterM3u8Url,
+                    type = ExtractorLinkType.M3U8
                 ) {
                     this.quality = Qualities.Unknown.value
                     this.referer = correctReferer
@@ -162,11 +162,9 @@ open class CustomDailymotion : ExtractorApi() {
                     callback.invoke(
                         newExtractorLink(
                             source = name,
-                            // Eksplisit include qualityLabel di name supaya
-                            // CloudStream tidak dobel-append quality label lagi
-                            name   = "$name",
-                            url    = variant.url,
-                            type   = ExtractorLinkType.M3U8
+                            name = "$name",
+                            url = variant.url,
+                            type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = qualityInt
                             this.referer = correctReferer
@@ -194,9 +192,9 @@ open class CustomDailymotion : ExtractorApi() {
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name   = name,
-                        url    = entryUrl,
-                        type   = ExtractorLinkType.VIDEO
+                        name = "$name",
+                        url = entryUrl,
+                        type = ExtractorLinkType.VIDEO
                     ) {
                         this.quality = qualityInt
                         this.referer = correctReferer

@@ -8,18 +8,18 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class RpmvidExtractor : ExtractorApi() {
-    override val name            = "Rpmvid"
-    override val mainUrl         = "https://anichin.rpmvid.com"
+    override val name = "Rpmvid"
+    override val mainUrl = "https://anichin.rpmvid.com"
     override val requiresReferer = true
 
     companion object {
         private const val UA_MOBILE =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/124.0.0.0 Mobile Safari/537.36"
+            "Chrome/149.0.0.0 Mobile Safari/537.36"
 
         private val AES_KEY = hexToBytes("6b69656d7469656e6d75613931316361")
-        private val AES_IV  = hexToBytes("313233343536373839306f6975797472")
+        private val AES_IV = hexToBytes("313233343536373839306f6975797472")
 
         private fun hexToBytes(hex: String): ByteArray =
             ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
@@ -31,7 +31,7 @@ class RpmvidExtractor : ExtractorApi() {
 
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             val keySpec = SecretKeySpec(AES_KEY, "AES")
-            val ivSpec  = IvParameterSpec(AES_IV)
+            val ivSpec = IvParameterSpec(AES_IV)
 
             for (skip in listOf(0, 4)) {
                 val ct = if (skip > 0) data.copyOfRange(skip, data.size) else data
@@ -47,10 +47,10 @@ class RpmvidExtractor : ExtractorApi() {
 
     data class RpmvidResponse(
         val hlsVideoTiktok : String? = null,
-        val source         : String? = null,
-        val cf             : String? = null,
-        val title          : String? = null,
-        val poster         : String? = null,
+        val source : String? = null,
+        val cf : String? = null,
+        val title : String? = null,
+        val poster : String? = null,
     )
 
     override suspend fun getUrl(
@@ -128,9 +128,9 @@ class RpmvidExtractor : ExtractorApi() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name   = streamName,
-                    url    = streamUrl,
-                    type   = ExtractorLinkType.M3U8
+                    name = streamName,
+                    url = streamUrl,
+                    type = ExtractorLinkType.M3U8
                 ) {
                     this.quality = Qualities.Unknown.value
                     this.referer = "$mainUrl/"
