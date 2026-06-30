@@ -59,8 +59,6 @@ class RpmvidExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        MegaNzExtractor.stopAll()
-
         val videoId = when {
             url.contains("#") -> url.substringAfterLast("#").trim()
             url.contains("id=") -> url.substringAfter("id=").substringBefore("&").trim()

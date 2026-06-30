@@ -64,8 +64,6 @@ open class DtubeExtractor : ExtractorApi() {
     ) {
         Log.d(TAG, "getUrl called with url=$url, referer=$referer")
 
-        MegaNzExtractor.stopAll()
-    
         // Parse raw base58 ID from URL
         // Examples:
         //   https://play.d.tube/?v=BXC71sLPVuRu72fuZ8K3hd
@@ -113,9 +111,6 @@ open class DtubeExtractor : ExtractorApi() {
             "Accept-Language" to "id-ID,id;q=0.9,en;q=0.8",
         )
         
-        // Stop proxy Mega yang aktif supaya tidak conflic codec/state
-        // ketika ExoPlayer init stream DTube baru → fix DECODER_INIT_FAILED
-        MegaNzExtractor.stopAll()
         Log.i(TAG, "Testing DTube streams for videoId=$videoId")
         
         // Try both CDN endpoints
