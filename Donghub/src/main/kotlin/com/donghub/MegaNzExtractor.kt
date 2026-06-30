@@ -204,6 +204,11 @@ class MegaNzExtractor : ExtractorApi() {
         Log.d(TAG, "URL: $url")
         Log.d(TAG, "Referer: $referer")
 
+        // Hentikan proxy Mega yang mungkin masih berjalan dari sumber sebelumnya.
+        // Dipanggil di sini supaya jika user pindah antar server Mega,
+        // proxy lama langsung stop dan tidak ada konflik decoder.
+        MegaNzExtractor.stopAll()
+
         val (nodeId, fileKey) = parseUrl(url) ?: run {
             Log.e(TAG, "Cannot parse Mega URL: $url")
             return
@@ -255,7 +260,9 @@ class MegaNzExtractor : ExtractorApi() {
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$label")
         Log.d(TAG, "CDN URL: ${cdnUrl.take(80)}...")
 
-        // Stop all old proxies
+        // Stop semua proxy lama sebelum buat yang baru
+        // Ini juga dipanggil dari extractor lain (DTube, CustomDailymotion) via stopAll()
+        Log.d(TAG, "Stopping old proxies before starting new one...")
         synchronized(activeProxies) {
             activeProxies.toList().forEach { it.stop() }
             activeProxies.clear()
@@ -327,10 +334,13 @@ class MegaNzExtractor : ExtractorApi() {
         }
         
         private fun acceptLoop() {
+            try { serverSocket?.soTimeout = 200 } catch (_: Exception) {}
             while (!stopped.get()) {
                 try {
                     val client = serverSocket!!.accept()
                     proxyExecutor.execute { handleClient(client) }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // normal wakeup to re-check stopped flag
                 } catch (e: Exception) {
                     if (!stopped.get()) Log.w(TAG, "Accept failed: ${e.message}")
                     break
@@ -506,7 +516,7 @@ class MegaNzExtractor : ExtractorApi() {
             val FLUSH_EVERY = 256 * 1024L
 
             try {
-                while (remaining != 0L) {
+                while (remaining != 0L && !stopped.get()) {
                     val want = when {
                         remaining > 0 -> minOf(buf.size.toLong(), remaining + toSkip).toInt()
                         else          -> buf.size

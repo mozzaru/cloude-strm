@@ -63,6 +63,8 @@ open class DtubeExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         Log.d(TAG, "getUrl called with url=$url, referer=$referer")
+
+        MegaNzExtractor.stopAll()
     
         // Parse raw base58 ID from URL
         // Examples:

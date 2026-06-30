@@ -72,6 +72,8 @@ open class CustomDailymotion : ExtractorApi() {
     ) {
         Log.d(TAG, "getUrl: $url")
 
+        MegaNzExtractor.stopAll()
+
         val (videoId, correctReferer) = parseVideoInfo(url) ?: run {
             Log.e(TAG, "Failed to parse video info from: $url")
             return
