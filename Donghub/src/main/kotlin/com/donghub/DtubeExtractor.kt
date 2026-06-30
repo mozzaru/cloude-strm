@@ -141,7 +141,7 @@ open class DtubeExtractor : ExtractorApi() {
                     callback(
                         newExtractorLink(
                             source = name,
-                            name = "$name",
+                            name = "$name ($label)",
                             url = m3u8Url,
                             type = ExtractorLinkType.M3U8
                         ) {
@@ -180,7 +180,7 @@ open class DtubeExtractor : ExtractorApi() {
                     callback(
                         newExtractorLink(
                             source = name,
-                            name = "$name",
+                            name = "$name (direct)",
                             url = directUrl,
                             type = ExtractorLinkType.M3U8
                         ) {

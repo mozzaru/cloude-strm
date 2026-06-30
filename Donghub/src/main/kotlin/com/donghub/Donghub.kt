@@ -349,66 +349,46 @@ class Donghub : MainAPI() {
 
         Log.i(TAG, "Server options found: ${options.size}")
 
-        // Tentukan prioritas berdasarkan URL isi (bukan label server):
-        // 0=Dailymotion, 1=DTube, 2=Mega, 99=lainnya
-        fun serverPriority(url: String): Int = when {
-            "dailymotion.com" in url || "dai.ly" in url -> 0
-            "d.tube" in url || "dtube" in url           -> 1
-            "mega.nz" in url || "mega.co.nz" in url     -> 2
-            else                                         -> 99
-        }
-
-        data class ServerEntry(val label: String, val finalUrl: String)
-        val entries = mutableListOf<ServerEntry>()
-
-        // Decode semua server terlebih dahulu
-        for (server in options) {
+        document.select(".mobius option").amap { server ->
             val serverLabel = server.text().trim()
             val base64 = server.attr("value").trim()
 
             if (base64.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — base64 blank")
-                continue
+                return@amap
             }
+
             val decoded = base64Decode(base64)
             if (decoded.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — decode result blank")
-                continue
+                return@amap
             }
+
             val doc = Jsoup.parse(decoded)
+
             val src = doc.selectFirst("iframe")
                 ?.attr("src").orEmpty()
-                .ifBlank {
+                .ifBlank { 
                     Log.d(TAG, "[$serverLabel] No iframe, fallback to video source")
-                    doc.selectFirst("video source")?.attr("src").orEmpty()
+                    doc.selectFirst("video source")?.attr("src").orEmpty() 
                 }
+
             if (src.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — no src found")
-                continue
+                return@amap
             }
+
             val finalUrl = when {
                 src.startsWith("http") -> src
                 src.startsWith("//")   -> "https:$src"
                 else -> {
                     Log.w(TAG, "[$serverLabel] Skipped — invalid URL format: $src")
-                    continue
+                    return@amap
                 }
             }
-            entries.add(ServerEntry(serverLabel, finalUrl))
-        }
 
-        // Sort berdasarkan URL isi yang sesungguhnya (bukan label di HTML):
-        // Dailymotion → DTube → Mega → lainnya
-        val sorted = entries.sortedBy { serverPriority(it.finalUrl) }
-        Log.i(TAG, "Server order after sort: ${sorted.map { it.label + "=" + serverPriority(it.finalUrl) }}")
-
-        // Proses SEQUENTIAL supaya:
-        // 1. Urutan callback ke player dijamin (DM duluan → muncul di atas)
-        // 2. Tidak ada race condition antar extractor yang masing-masing
-        //    memanggil MegaNzExtractor.stopAll() — kalau parallel, DTube bisa
-        //    stopAll() tepat saat Mega sedang init proxy → DECODER_INIT_FAILED
-        for ((serverLabel, finalUrl) in sorted) {
             Log.i(TAG, "[$serverLabel] → $finalUrl")
+
             when {
                 "geo.dailymotion.com" in finalUrl -> {
                     Log.d(TAG, "[$serverLabel] ▶ CustomGeoDailymotion")

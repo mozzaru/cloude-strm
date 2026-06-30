@@ -12,6 +12,6 @@ class DonghubProvider : BasePlugin() {
         registerExtractorAPI(CustomGeoDailymotion())
         registerExtractorAPI(CustomDailymotion())
         registerExtractorAPI(RpmvidExtractor())
-        registerExtractorAPI(MegaNzExtractor())
+        //registerExtractorAPI(MegaNzExtractor())
     }
 }
