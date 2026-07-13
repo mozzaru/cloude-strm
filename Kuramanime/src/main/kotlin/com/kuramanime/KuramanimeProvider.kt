@@ -1,10 +1,12 @@
 package com.kuramanime
 
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
+import com.lagradost.cloudstream3.extractors.Dailymotion
+import com.lagradost.cloudstream3.extractors.*
 
 @CloudstreamPlugin
-class KuramanimeProvider: Plugin() {
+class KuramanimeProvider: BasePlugin() {
     override fun load() {
         registerMainAPI(Kuramanime())
         registerExtractorAPI(Nyomo())

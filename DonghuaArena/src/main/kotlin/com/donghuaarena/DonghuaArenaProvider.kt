@@ -1,11 +1,11 @@
 package com.donghuaarena
 
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.extractors.*
 
 @CloudstreamPlugin
-class DonghuaArenaProvider: Plugin() {
+class DonghuaArenaProvider: BasePlugin() {
     override fun load() {
         registerMainAPI(DonghuaArena())
 

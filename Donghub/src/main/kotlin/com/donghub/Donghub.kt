@@ -43,9 +43,9 @@ class Donghub : MainAPI() {
         "anime/?status=&type=movie&order=" to "Movie"
     )
 
-    private val geoDmExtractor  = CustomGeoDailymotion()
-    private val dmExtractor     = CustomDailymotion()
-    private val megaExtractor   = MegaNzExtractor()
+    //private val geoDmExtractor  = CustomGeoDailymotion()
+    //private val dmExtractor     = CustomDailymotion()
+    //private val megaExtractor   = MegaNzExtractor()
     private val dtubeExtractor  = DtubeExtractor()
 
     private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
@@ -349,7 +349,7 @@ class Donghub : MainAPI() {
 
         Log.i(TAG, "Server options found: ${options.size}")
 
-        document.select(".mobius option").amap { server ->
+        options.amap { server ->
             val serverLabel = server.text().trim()
             val base64 = server.attr("value").trim()
 
@@ -368,9 +368,9 @@ class Donghub : MainAPI() {
 
             val src = doc.selectFirst("iframe")
                 ?.attr("src").orEmpty()
-                .ifBlank { 
+                .ifBlank {
                     Log.d(TAG, "[$serverLabel] No iframe, fallback to video source")
-                    doc.selectFirst("video source")?.attr("src").orEmpty() 
+                    doc.selectFirst("video source")?.attr("src").orEmpty()
                 }
 
             if (src.isBlank()) {
@@ -388,21 +388,8 @@ class Donghub : MainAPI() {
             }
 
             Log.i(TAG, "[$serverLabel] → $finalUrl")
-
-            when {
-                "geo.dailymotion.com" in finalUrl -> {
-                    Log.d(TAG, "[$serverLabel] ▶ CustomGeoDailymotion")
-                    geoDmExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
-                }
-                "dailymotion.com" in finalUrl || "dai.ly" in finalUrl -> {
-                    Log.d(TAG, "[$serverLabel] ▶ CustomDailymotion")
-                    dmExtractor.getUrl(finalUrl, data, subtitleCallback, callback)
-                }
-                else -> {
-                    Log.d(TAG, "[$serverLabel] ▶ loadExtractor")
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
-                }
-            }
+            Log.d(TAG, "[$serverLabel] ▶ loadExtractor")
+            loadExtractor(finalUrl, data, subtitleCallback, callback)
         }
 
         Log.i(TAG, "=== loadLinks done ===")
