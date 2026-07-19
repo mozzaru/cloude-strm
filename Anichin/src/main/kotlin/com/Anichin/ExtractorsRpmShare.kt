@@ -43,8 +43,10 @@ class RpmShare : ExtractorApi() {
         val hlsVideoTiktok: String? = null,
         val source: String? = null,
         val cf: String? = null,
+        val cfNative: String? = null,
         val title: String? = null,
         val poster: String? = null,
+        val pk: Map<String, Any>? = null,
     )
 
     override suspend fun getUrl(
@@ -88,7 +90,7 @@ class RpmShare : ExtractorApi() {
                 Log.d("RpmShare", "Warm-up request failed (non-fatal): ${e.message}")
             }
 
-            val apiUrl = "$mainUrl/api/v1/video?id=$videoId&w=360&h=800&r=anichin.moe"
+            val apiUrl = "$mainUrl/api/v1/video?id=$videoId&w=360&h=800"
             Log.d("RpmShare", "Fetching API: $apiUrl")
 
             val rawResponse = try {
@@ -145,6 +147,9 @@ class RpmShare : ExtractorApi() {
             }
             json.cf?.takeIf { it.isNotBlank() }?.let {
                 streams.add("RpmShare CF" to it)
+            }
+            json.cfNative?.takeIf { it.isNotBlank() }?.let {
+                streams.add("RpmShare CF Native" to it)
             }
 
             if (streams.isEmpty()) {

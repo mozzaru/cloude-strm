@@ -16,83 +16,87 @@ class Turbovidhls : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d("Turbovidhls", "getUrl: $url, referer: $referer")
-        val response = app.get(url, referer = referer)
-        val html = response.text
-        Log.d("Turbovidhls", "Page size: ${html.length}")
+        try {
+            Log.d("Turbovidhls", "getUrl: $url, referer: $referer")
+            val response = app.get(url, referer = referer)
+            val html = response.text
+            Log.d("Turbovidhls", "Page size: ${html.length}")
 
-        val hashMatch = Regex("""data-hash="([^"]+)""").find(html)
-        if (hashMatch != null) {
-            val m3u8Url = hashMatch.groupValues[1]
-            Log.d("Turbovidhls", "Found m3u8 URL: $m3u8Url")
-
-            val mHeaders = mapOf(
-                "Referer" to mainUrl,
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36",
-                "Origin" to mainUrl,
-            )
-
-            Log.d("Turbovidhls", "Verifying m3u8 accessibility...")
-            val m3u8Response = try {
-                app.get(m3u8Url, headers = mHeaders)
-            } catch (e: Exception) {
-                Log.w("Turbovidhls", "m3u8 fetch FAILED: ${e.message}")
+            val m3u8Url = extractM3u8FromPage(html)
+            if (m3u8Url != null) {
+                Log.d("Turbovidhls", "Found m3u8 URL: ${m3u8Url.take(80)}...")
+                handleM3u8(m3u8Url, callback)
                 return
             }
-            val body = m3u8Response.text
-            Log.d("Turbovidhls", "m3u8 size: ${body.length}")
 
-            if (body.startsWith("#EXTM3U")) {
-                Log.d("Turbovidhls", "Valid m3u8 header confirmed")
-                val base = m3u8Url.substringBeforeLast("/")
-
-                val variants = mutableListOf<Pair<String, String>>()
-                val streamInfRegex = Regex("#EXT-X-STREAM-INF[^#]*BANDWIDTH=(\\d+)[^#]*\n([^#\n]+)")
-                streamInfRegex.findAll(body).forEach { m ->
-                    val bw = m.groupValues[1].toIntOrNull() ?: 0
-                    var varUrl = m.groupValues[2].trim()
-                    if (!varUrl.startsWith("http")) {
-                        varUrl = if (varUrl.startsWith("/")) {
-                            "${m3u8Url.substringBefore("://")}://${m3u8Url.substringAfter("://").substringBefore("/")}$varUrl"
-                        } else {
-                            "$base/$varUrl"
-                        }
-                    }
-                    val q = when {
-                        bw >= 5000000 -> "1080p"
-                        bw >= 2500000 -> "720p"
-                        bw >= 1000000 -> "480p"
-                        bw >= 500000  -> "360p"
-                        else -> "240p"
-                    }
-                    Log.d("Turbovidhls", "  Variant: ${bw}bps($q) -> ${varUrl.take(80)}...")
-                    variants.add(q to varUrl)
-                }
-
-                if (variants.isEmpty()) {
-                    val segCount = Regex("#EXTINF").findAll(body).count()
-                    Log.d("Turbovidhls", "No variants, segments: $segCount")
-                    Log.d("Turbovidhls", "Body: ${body.take(1000)}")
-                }
-
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mHeaders
-                    }
-                )
-            } else {
-                Log.w("Turbovidhls", "Response is NOT m3u8: ${body.take(500)}")
-            }
-        } else {
-            Log.w("Turbovidhls", "No data-hash found")
+            Log.w("Turbovidhls", "No m3u8 found in page")
             Log.d("Turbovidhls", "Page sample: ${html.take(2000)}")
+        } catch (e: Exception) {
+            Log.w("Turbovidhls", "UNCAUGHT: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun extractM3u8FromPage(html: String): String? {
+        val hashMatch = Regex("""data-hash="([^"]+)""").find(html)
+        if (hashMatch != null) {
+            val url = hashMatch.groupValues[1]
+            Log.d("Turbovidhls", "Extracted via data-hash: ${url.take(60)}...")
+            return url
+        }
+
+        val m3u8Direct = Regex("""https?://[^"'\s<>]+\.m3u8[^"'\s<>]*""").find(html)
+        if (m3u8Direct != null) {
+            Log.d("Turbovidhls", "Extracted via direct regex: ${m3u8Direct.value.take(60)}...")
+            return m3u8Direct.value
+        }
+
+        val srcM3u8 = Regex("""src=["']([^"']+\.m3u8[^"']*)["']""").find(html)
+        if (srcM3u8 != null) {
+            val url = srcM3u8.groupValues[1]
+            Log.d("Turbovidhls", "Extracted via src attr: $url")
+            return if (url.startsWith("http")) url else "https:$url"
+        }
+
+        return null
+    }
+
+    private suspend fun handleM3u8(m3u8Url: String, callback: (ExtractorLink) -> Unit) {
+        val mHeaders = mapOf(
+            "Referer" to mainUrl,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36",
+            "Origin" to mainUrl,
+        )
+
+        Log.d("Turbovidhls", "Verifying m3u8 accessibility...")
+        val m3u8Response = try {
+            app.get(m3u8Url, headers = mHeaders)
+        } catch (e: Exception) {
+            Log.w("Turbovidhls", "m3u8 fetch FAILED: ${e.message}")
+            return
+        }
+        val body = m3u8Response.text
+        Log.d("Turbovidhls", "m3u8 size: ${body.length}")
+
+        if (body.startsWith("#EXTM3U")) {
+            Log.d("Turbovidhls", "Valid m3u8 header confirmed")
+            val variantCount = Regex("#EXT-X-STREAM-INF").findAll(body).count()
+            val segmentCount = Regex("#EXTINF").findAll(body).count()
+            Log.d("Turbovidhls", "$variantCount variants, $segmentCount segments")
+
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = m3u8Url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mHeaders
+                }
+            )
+        } else {
+            Log.w("Turbovidhls", "Response is NOT m3u8: ${body.take(500)}")
         }
     }
 }
