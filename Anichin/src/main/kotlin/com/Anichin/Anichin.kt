@@ -1,5 +1,6 @@
 package com.Anichin
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
@@ -278,15 +279,29 @@ class Anichin : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d("AnichinLoadLinks", "Loading links for: $data")
         val document = app.get(data, headers = browserHeaders).document
+        val serverCount = document.select(".mobius option").size
+        Log.d("AnichinLoadLinks", "Found $serverCount server options")
         document.select(".mobius option").amap { server ->
+            val label = server.text().trim()
             val base64 = server.attr("value")
-            if (base64.isBlank()) return@amap
-            val decoded = try { base64Decode(base64) } catch (_: Exception) { return@amap }
+            if (base64.isBlank()) {
+                Log.w("AnichinLoadLinks", "Server '$label': blank base64, skipping")
+                return@amap
+            }
+            val decoded = try { base64Decode(base64) } catch (e: Exception) {
+                Log.w("AnichinLoadLinks", "Server '$label': base64 decode failed: ${e.message}")
+                return@amap
+            }
             val doc = Jsoup.parse(decoded)
             val href = doc.select("iframe").attr("src")
-            if (href.isBlank()) return@amap
+            if (href.isBlank()) {
+                Log.w("AnichinLoadLinks", "Server '$label': no iframe in decoded html")
+                return@amap
+            }
             val url = httpsify(href)
+            Log.d("AnichinLoadLinks", "Server '$label': loading extractor URL: $url")
             loadExtractor(url, subtitleCallback, callback)
         }
         return true

@@ -16,26 +16,17 @@ class VidHide : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        Log.d("VidHide", "Fetching: $url")
+        Log.d("VidHide", "getUrl: $url, referer: $referer")
         val response = app.get(url, referer = referer ?: "https://anichin.moe/")
         val html = response.text
+        Log.d("VidHide", "Page size: ${html.length}")
 
         val m3u8Regex = Regex("""https?://[^\s"'<>]*\.m3u8[^\s"'<>]*""")
         val directM3u8 = m3u8Regex.find(html)
         if (directM3u8 != null) {
             val m3u8Url = directM3u8.value
             Log.d("VidHide", "Found direct m3u8: ${m3u8Url.take(80)}...")
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = m3u8Url,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.Unknown.value
-                }
-            )
+            verifyAndReturn(m3u8Url, callback)
             return
         }
 
@@ -50,29 +41,59 @@ class VidHide : ExtractorApi() {
             val c = packedMatch.groupValues[4].toIntOrNull() ?: 0
             val k = packedMatch.groupValues[6].split("|")
 
+            Log.d("VidHide", "Packed JS: p.length=${p.length}, a=$a, c=$c, k.size=${k.size}")
             val unpacked = unpackPacker(p, a, c, k)
             Log.d("VidHide", "Unpacked JS length: ${unpacked.length}")
+            Log.d("VidHide", "Unpacked sample: ${unpacked.take(500)}")
 
             val m3u8InUnpacked = m3u8Regex.find(unpacked)
             if (m3u8InUnpacked != null) {
                 val m3u8Url = m3u8InUnpacked.value
                 Log.d("VidHide", "Found m3u8 from packed JS: ${m3u8Url.take(80)}...")
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = m3u8Url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
+                verifyAndReturn(m3u8Url, callback)
                 return
+            } else {
+                Log.w("VidHide", "No m3u8 in unpacked JS")
+                Log.d("VidHide", "Unpacked bigger sample: ${unpacked.take(1500)}")
             }
+        } else {
+            Log.w("VidHide", "No packed JS found on page")
+            Log.d("VidHide", "HTML sample: ${html.take(2000)}")
         }
+    }
 
-        Log.w("VidHide", "No m3u8 found")
+    private suspend fun verifyAndReturn(m3u8Url: String, callback: (ExtractorLink) -> Unit) {
+        Log.d("VidHide", "Verifying m3u8: ${m3u8Url.take(80)}...")
+        val headers = mapOf(
+            "Referer" to mainUrl,
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36",
+        )
+        try {
+            val resp = app.get(m3u8Url, headers = headers)
+            Log.d("VidHide", "m3u8 size: ${resp.text.length}")
+            val body = resp.text
+            if (body.startsWith("#EXTM3U")) {
+                val variants = Regex("#EXT-X-STREAM-INF").findAll(body).count()
+                val segments = Regex("#EXTINF").findAll(body).count()
+                Log.d("VidHide", "Valid m3u8: $variants variants, $segments segments")
+            } else {
+                Log.w("VidHide", "NOT m3u8: ${body.take(300)}")
+            }
+        } catch (e: Exception) {
+            Log.w("VidHide", "Verify FAILED: ${e.message}")
+        }
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = m3u8Url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.Unknown.value
+                this.headers = headers
+            }
+        )
     }
 
     private fun unpackPacker(p: String, a: Int, c: Int, k: List<String>): String {
