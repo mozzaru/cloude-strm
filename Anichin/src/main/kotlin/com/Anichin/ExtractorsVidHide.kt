@@ -39,15 +39,15 @@ class VidHide : ExtractorApi() {
             Log.d("VidHide", "No direct m3u8, looking for packed JS...")
 
             val packedRegex = Regex(
-                """eval\(function\(p,a,c,k,e,d\)\{[^}]+}\((['"])([^]*?)\1,(\d+),(\d+),(['"])([^]*?)\5"""
+                """eval\(function\(p,a,c,k,e,d\)\{[^}]+}\((['"][\s\S]*?['"]),(\d+),(\d+),(['"][\s\S]*?['"])"""
             )
             val packedMatch = packedRegex.find(html)
 
             if (packedMatch != null) {
-                val p = packedMatch.groupValues[2]
-                val a = packedMatch.groupValues[3].toIntOrNull() ?: 36
-                val c = packedMatch.groupValues[4].toIntOrNull() ?: 0
-                val k = packedMatch.groupValues[6].split("|")
+                val p = packedMatch.groupValues[1].trim('\'', '"')
+                val a = packedMatch.groupValues[2].toIntOrNull() ?: 36
+                val c = packedMatch.groupValues[3].toIntOrNull() ?: 0
+                val k = packedMatch.groupValues[4].trim('\'', '"').split("|")
 
                 Log.d("VidHide", "Packed JS found: p.length=${p.length}, a=$a, c=$c, k.size=${k.size}")
                 Log.d("VidHide", "Packed JS first 200: ${p.take(200)}")

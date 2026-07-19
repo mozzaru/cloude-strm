@@ -86,33 +86,74 @@ class AnichinPlayer : ExtractorApi() {
         }
         Log.d("AnichinPlayer", "Metadata fetched, size: ${metaResponse.text.length}")
         val metaText = metaResponse.text
-        Log.d("AnichinPlayer", "Metadata: ${metaText.take(1500)}")
+        Log.d("AnichinPlayer", "Metadata full: ${metaText}")
 
-        if (metaText.contains("error") || metaText.contains("\"status\":2004") || metaText.contains("geoblocked", ignoreCase = true)) {
-            Log.w("AnichinPlayer", "Video restricted/geo-blocked: $videoId")
-            Log.d("AnichinPlayer", "Error response: ${metaText.take(500)}")
+        val isPrivate = metaText.contains("\"private\":true")
+        val isGeoBlocked = metaText.contains("\"status\":2004") || metaText.contains("geoblocked", ignoreCase = true)
+        Log.d("AnichinPlayer", "isPrivate=$isPrivate, isGeoBlocked=$isGeoBlocked")
+
+        if (isGeoBlocked) {
+            Log.w("AnichinPlayer", "Video geo-blocked: $videoId")
             return
         }
+        if (isPrivate) {
+            Log.d("AnichinPlayer", "Video is private, trying ad_url or stream_formats...")
+        }
 
-        val m3u8Urls = Regex(""""url"\s*:\s*"([^"]*\.m3u8[^"]*)""")
-            .findAll(metaText)
-            .map { it.groupValues[1].replace("\\/", "/").replace("\\u0026", "&") }
-            .toList()
+        val unescaped = metaText.replace("\\/", "/").replace("\\u0026", "&")
+        Log.d("AnichinPlayer", "Unescaped sample: ${unescaped.take(1000)}")
 
-        Log.d("AnichinPlayer", "Found ${m3u8Urls.size} m3u8 URLs")
-        if (m3u8Urls.isEmpty()) {
-            val fallbackM3u8 = Regex("""https?://[^"'\s,]+\.m3u8[^"'\s,]*""")
-                .find(metaText)?.value
-            if (fallbackM3u8 != null) {
-                Log.d("AnichinPlayer", "Fallback m3u8: ${fallbackM3u8.take(80)}...")
-                verifyDmM3u8(fallbackM3u8, callback)
-            } else {
-                Log.w("AnichinPlayer", "No m3u8 at all in metadata")
+        val streamFormats = Regex(""""stream_formats":\s*(\{[^}]+\})""").find(metaText)
+        if (streamFormats != null) {
+            Log.d("AnichinPlayer", "stream_formats: ${streamFormats.groupValues[1]}")
+        }
+
+        val allM3u8 = mutableListOf<String>()
+
+        Regex("""ad_url"\s*:\s*"([^"]+)""").findAll(metaText).forEach {
+            val url = it.groupValues[1].replace("\\/", "/").replace("\\u0026", "&")
+            Log.d("AnichinPlayer", "Found ad_url: ${url.take(80)}...")
+            allM3u8.add(url)
+        }
+
+        val qualsRegex = Regex(""""url"\s*:\s*"([^"]*\.m3u8[^"]*)""")
+        qualsRegex.findAll(metaText).forEach {
+            val url = it.groupValues[1].replace("\\/", "/").replace("\\u0026", "&")
+            Log.d("AnichinPlayer", "Found qualities m3u8: ${url.take(80)}...")
+            allM3u8.add(url)
+        }
+
+        val anyM3u8 = Regex("""https?://[^"'\s,]+?\.m3u8[^"'\s,]*""").findAll(unescaped)
+        anyM3u8.forEach {
+            Log.d("AnichinPlayer", "Found any m3u8: ${it.value.take(80)}...")
+            allM3u8.add(it.value)
+        }
+
+        val deduped = allM3u8.distinct()
+        Log.d("AnichinPlayer", "Total unique m3u8 URLs: ${deduped.size}")
+
+        if (deduped.isEmpty()) {
+            Log.w("AnichinPlayer", "No m3u8 found in metadata")
+            Log.d("AnichinPlayer", "Trying video page fallback...")
+            try {
+                val videoPage = app.get("https://www.dailymotion.com/video/$videoId", headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to "https://www.dailymotion.com/",
+                )).text
+                val pageM3u8 = Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""").find(videoPage)
+                if (pageM3u8 != null) {
+                    Log.d("AnichinPlayer", "Video page m3u8: ${pageM3u8.value.take(80)}...")
+                    verifyDmM3u8(pageM3u8.value, callback)
+                } else {
+                    Log.w("AnichinPlayer", "No m3u8 on video page either")
+                }
+            } catch (e: Exception) {
+                Log.w("AnichinPlayer", "Video page FAILED: ${e.message}")
             }
             return
         }
 
-        m3u8Urls.forEach { verifyDmM3u8(it, callback) }
+        deduped.forEach { verifyDmM3u8(it, callback) }
     }
 
     private suspend fun verifyDmM3u8(m3u8Url: String, callback: (ExtractorLink) -> Unit) {

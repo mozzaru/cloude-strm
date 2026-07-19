@@ -310,7 +310,16 @@ class Anichin : MainAPI() {
             }
             val url = httpsify(href)
             Log.d("AnichinLoadLinks", "Server '$label': loading extractor URL: $url")
-            loadExtractor(url, subtitleCallback, callback)
+            if (url.contains("rpmvid.com") || url.contains("rpmvid")) {
+                Log.d("AnichinLoadLinks", "Server '$label': using direct RpmShare handler")
+                try {
+                    RpmShare().getUrl(url, null, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    Log.w("AnichinLoadLinks", "RpmShare direct call FAILED: ${e.message}")
+                }
+            } else {
+                loadExtractor(url, subtitleCallback, callback)
+            }
         }
         return true
     }
