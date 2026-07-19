@@ -295,9 +295,17 @@ class Anichin : MainAPI() {
                 return@amap
             }
             val doc = Jsoup.parse(decoded)
-            val href = doc.select("iframe").attr("src")
+            val iframes = doc.select("iframe")
+            Log.d("AnichinLoadLinks", "Server '$label': decoded HTML has ${iframes.size} iframes")
+            if (iframes.isEmpty()) {
+                Log.w("AnichinLoadLinks", "Server '$label': no iframe found")
+                Log.d("AnichinLoadLinks", "Server '$label': decoded HTML: ${decoded.take(500)}")
+                return@amap
+            }
+            val href = iframes.attr("src")
             if (href.isBlank()) {
-                Log.w("AnichinLoadLinks", "Server '$label': no iframe in decoded html")
+                Log.w("AnichinLoadLinks", "Server '$label': iframe src is blank")
+                iframes.forEachIndexed { i, f -> Log.d("AnichinLoadLinks", "  iframe[$i] attrs: ${f.attributes()}") }
                 return@amap
             }
             val url = httpsify(href)
