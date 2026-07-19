@@ -38,45 +38,64 @@ class VidHide : ExtractorApi() {
             }
             Log.d("VidHide", "No direct m3u8, looking for packed JS...")
 
-            val packedRegex = Regex(
-                """eval\(function\(p,a,c,k,e,d\)\{[^}]+}\((['"][\s\S]*?['"]),(\d+),(\d+),(['"][\s\S]*?['"])"""
-            )
-            val packedMatch = packedRegex.find(html)
+            Log.d("VidHide", "No direct m3u8, scanning scripts for packed JS...")
+            val allScripts = Jsoup.parse(html).select("script")
+            Log.d("VidHide", "Total scripts: ${allScripts.size}")
 
-            if (packedMatch != null) {
-                val p = packedMatch.groupValues[1].trim('\'', '"')
-                val a = packedMatch.groupValues[2].toIntOrNull() ?: 36
-                val c = packedMatch.groupValues[3].toIntOrNull() ?: 0
-                val k = packedMatch.groupValues[4].trim('\'', '"').split("|")
+            var found = false
+            for (script in allScripts) {
+                val data = script.data()
+                if (data.contains("function(p,a,c,k,e,d)") || data.contains("eval(function(p,a,c,k,e,d)")) {
+                    Log.d("VidHide", "Found packed JS script, length=${data.length}")
+                    Log.d("VidHide", "Script content (first 500): ${data.take(500)}")
 
-                Log.d("VidHide", "Packed JS found: p.length=${p.length}, a=$a, c=$c, k.size=${k.size}")
-                Log.d("VidHide", "Packed JS first 200: ${p.take(200)}")
-                val unpacked = unpackPacker(p, a, c, k)
-                Log.d("VidHide", "Unpacked JS length: ${unpacked.length}")
-                Log.d("VidHide", "Unpacked contains m3u8: ${m3u8Regex.containsMatchIn(unpacked)}")
-                Log.d("VidHide", "Unpacked sample: ${unpacked.take(500)}")
+                    val startQuote = data.indexOfAny(charArrayOf('\'', '"'), data.indexOf("}("))
+                    if (startQuote < 0) { Log.d("VidHide", "No start quote found"); continue }
+                    val quoteChar = data[startQuote]
+                    val pEnd = data.indexOf(quoteChar, startQuote + 1)
+                    if (pEnd < 0) { Log.d("VidHide", "No end quote for p"); continue }
+                    val p = data.substring(startQuote + 1, pEnd)
 
-                val m3u8InUnpacked = m3u8Regex.find(unpacked)
-                if (m3u8InUnpacked != null) {
-                    val m3u8Url = m3u8InUnpacked.value
-                    Log.d("VidHide", "Found m3u8 from packed JS: ${m3u8Url.take(80)}...")
-                    verifyAndReturn(m3u8Url, callback)
-                    Log.d("VidHide", "getUrl done (packed JS)")
-                    return
-                } else {
-                    Log.w("VidHide", "No m3u8 in unpacked JS")
-                    Log.d("VidHide", "Unpacked bigger sample: ${unpacked.take(2000)}")
-                }
-            } else {
-                Log.w("VidHide", "No packed JS found on page")
-                Log.d("VidHide", "Checking for other script patterns...")
-                val allScripts = Jsoup.parse(html).select("script")
-                Log.d("VidHide", "Total scripts: ${allScripts.size}")
-                allScripts.forEachIndexed { i, s ->
-                    val data = s.data()
-                    if (data.length > 20) {
-                        Log.d("VidHide", "  script[$i]: ${data.take(200)}")
+                    val rest = data.substring(pEnd + 1)
+                    val parts = rest.split(",")
+                    val a = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 36
+                    val c = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+
+                    val kStart = rest.indexOfAny(charArrayOf('\'', '"'), rest.indexOf("," + c + ","))
+                    if (kStart < 0) { Log.d("VidHide", "No k quote start"); continue }
+                    val kQuote = rest[kStart]
+                    val kEnd = rest.indexOf(kQuote, kStart + 1)
+                    if (kEnd < 0) { Log.d("VidHide", "No k quote end"); continue }
+                    val kRaw = rest.substring(kStart + 1, kEnd)
+                    val k = kRaw.split("|")
+
+                    Log.d("VidHide", "Parsed: p.length=${p.length}, a=$a, c=$c, k.size=${k.size}")
+                    Log.d("VidHide", "p first 200: ${p.take(200)}")
+
+                    val unpacked = unpackPacker(p, a, c, k)
+                    Log.d("VidHide", "Unpacked length: ${unpacked.length}")
+                    Log.d("VidHide", "Unpacked contains m3u8: ${m3u8Regex.containsMatchIn(unpacked)}")
+                    Log.d("VidHide", "Unpacked sample: ${unpacked.take(1000)}")
+
+                    val m3u8InUnpacked = m3u8Regex.find(unpacked)
+                    if (m3u8InUnpacked != null) {
+                        val m3u8Url = m3u8InUnpacked.value
+                        Log.d("VidHide", "Found m3u8: ${m3u8Url.take(80)}...")
+                        verifyAndReturn(m3u8Url, callback)
+                        Log.d("VidHide", "getUrl done (packed JS)")
+                        found = true
+                        return
+                    } else {
+                        Log.w("VidHide", "No m3u8 in unpacked JS")
+                        Log.d("VidHide", "Unpacked bigger: ${unpacked.take(2000)}")
                     }
+                }
+            }
+            if (!found) {
+                Log.w("VidHide", "No packed JS found on page")
+                allScripts.forEachIndexed { i, s ->
+                    val d = s.data()
+                    if (d.length > 20) Log.d("VidHide", "  script[$i]: ${d.take(200)}")
                 }
                 Log.d("VidHide", "HTML sample: ${html.take(2000)}")
             }
