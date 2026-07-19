@@ -9,9 +9,8 @@ import com.lagradost.cloudstream3.extractors.*
 class AnichinProvider: BasePlugin() {
     override fun load() {
         registerMainAPI(Anichin())
-        //registerExtractorAPI(Odnoklassniki())
-        //registerExtractorAPI(OkRuSSL())
-        //registerExtractorAPI(OkRuHTTP())
+        registerExtractorAPI(OkRuSSL())
+        registerExtractorAPI(OkRuHTTP())
         registerExtractorAPI(Rumble())
         registerExtractorAPI(StreamRuby())
         registerExtractorAPI(svilla())
@@ -20,5 +19,9 @@ class AnichinProvider: BasePlugin() {
         registerExtractorAPI(Vidguardto1())
         registerExtractorAPI(Vidguardto2())
         registerExtractorAPI(Vidguardto3())
+        registerExtractorAPI(AnichinPlayer())
+        registerExtractorAPI(Turbovidhls())
+        registerExtractorAPI(RpmShare())
+        registerExtractorAPI(VidHide())
     }
 }

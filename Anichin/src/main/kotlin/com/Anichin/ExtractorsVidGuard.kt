@@ -39,22 +39,29 @@ open class Vidguardto : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val res = app.get(getEmbedUrl(url))
+        Log.d("Vidguard", "getUrl: $url")
+        val embedUrl = getEmbedUrl(url)
+        Log.d("Vidguard", "Embed URL: $embedUrl")
+        val res = app.get(embedUrl)
         val resc = res.document.select("script:containsData(eval)").firstOrNull()?.data()
-        resc?.let {
-            val jsonStr2 = AppUtils.parseJson<SvgObject>(runJS2(it))
-            val watchlink = sigDecode(jsonStr2.stream)
-
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    name,
-                    watchlink,
-                ) {
-                    this.referer = mainUrl
-                }
-            )
+        if (resc == null) {
+            Log.w("Vidguard", "No eval script found")
+            return
         }
+        Log.d("Vidguard", "Found eval script, running JS...")
+        val jsonStr2 = AppUtils.parseJson<SvgObject>(runJS2(resc))
+        val watchlink = sigDecode(jsonStr2.stream)
+        Log.d("Vidguard", "Decoded stream URL: ${watchlink.take(80)}...")
+
+        callback.invoke(
+            newExtractorLink(
+                this.name,
+                name,
+                watchlink,
+            ) {
+                this.referer = mainUrl
+            }
+        )
     }
 
     @OptIn(ExperimentalEncodingApi::class)

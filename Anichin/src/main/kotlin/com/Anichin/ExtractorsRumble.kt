@@ -1,18 +1,13 @@
 package com.Anichin
 
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.ErrorLoadingException
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 
 class Rumble : ExtractorApi() {
@@ -26,15 +21,21 @@ class Rumble : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("Rumble", "getUrl: $url")
         val response = app.get(url, referer = referer ?: "$mainUrl/")
         val scriptData = response.document.selectFirst("script:containsData(mp4)")?.data()
             ?.substringAfter("{\"mp4")?.substringBefore("\"evt\":{")
-        if (scriptData == null) return
+        if (scriptData == null) {
+            Log.w("Rumble", "No mp4 script data found")
+            return
+        }
 
+        Log.d("Rumble", "Found script data, extracting m3u8...")
         val regex = """"url":"(.*?)"|h":(.*?)\}""".toRegex()
         val matches = regex.findAll(scriptData)
 
         val processedUrls = mutableSetOf<String>()
+        var found = false
 
         for (match in matches) {
             val rawUrl = match.groupValues[1]
@@ -45,21 +46,25 @@ class Rumble : ExtractorApi() {
             if (!cleanedUrl.endsWith(".m3u8")) continue
             if (!processedUrls.add(cleanedUrl)) continue
 
+            Log.d("Rumble", "Checking m3u8: ${cleanedUrl.take(80)}...")
             val m3u8Response = app.get(cleanedUrl)
             val variantCount = "#EXT-X-STREAM-INF".toRegex().findAll(m3u8Response.text).count()
+            Log.d("Rumble", "  Variants: $variantCount")
 
             if (variantCount > 1) {
+                Log.d("Rumble", "Found valid m3u8 with $variantCount variants")
                 callback.invoke(
                     newExtractorLink(
-                        this@Rumble.name,   // source
-                        "Rumble",       // name
-                        cleanedUrl,         // url
-                        ExtractorLinkType.M3U8 // type
-                        // initializer tidak perlu diisi
+                        this@Rumble.name,
+                        "Rumble",
+                        cleanedUrl,
+                        ExtractorLinkType.M3U8
                     )
                 )
+                found = true
                 break
             }
         }
+        if (!found) Log.w("Rumble", "No valid m3u8 found")
     }
 }

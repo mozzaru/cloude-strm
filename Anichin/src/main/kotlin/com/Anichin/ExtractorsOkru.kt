@@ -3,6 +3,7 @@
 package com.Anichin
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.USER_AGENT
@@ -32,6 +33,7 @@ open class Odnoklassniki : ExtractorApi() {
     override val requiresReferer = false
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        Log.d("Odnoklassniki", "getUrl: $url")
         val headers = mapOf(
             "Accept" to "*/*",
             "Connection" to "keep-alive",
@@ -42,18 +44,20 @@ open class Odnoklassniki : ExtractorApi() {
             "User-Agent" to USER_AGENT,
         )
         val embedUrl = url.replace("/video/","/videoembed/")
+        Log.d("Odnoklassniki", "Fetching embed: $embedUrl")
         val videoReq  = app.get(embedUrl, headers=headers).text.replace("\\&quot;", "\"").replace("\\\\", "\\")
             .replace(Regex("\\\\u([0-9A-Fa-f]{4})")) { matchResult ->
                 Integer.parseInt(matchResult.groupValues[1], 16).toChar().toString()
             }
 
-        val videosStr = Regex(""""videos":(\[[^]]*])""").find(videoReq)?.groupValues?.get(1) ?: throw ErrorLoadingException("Video not found")
-        val videos    = AppUtils.tryParseJson<List<OkRuVideo>>(videosStr) ?: throw ErrorLoadingException("Video not found")
+        val videosStr = Regex(""""videos":(\[[^]]*])""").find(videoReq)?.groupValues?.get(1)
+            ?: throw ErrorLoadingException("Video not found")
+        val videos = AppUtils.tryParseJson<List<OkRuVideo>>(videosStr)
+            ?: throw ErrorLoadingException("Video not found")
 
+        Log.d("Odnoklassniki", "Found ${videos.size} video qualities")
         for (video in videos) {
-
             val videoUrl  = if (video.url.startsWith("//")) "https:${video.url}" else video.url
-
             val quality   = video.name.uppercase()
                 .replace("MOBILE", "144p")
                 .replace("LOWEST", "240p")
@@ -64,6 +68,7 @@ open class Odnoklassniki : ExtractorApi() {
                 .replace("QUAD",   "1440p")
                 .replace("ULTRA",  "4k")
 
+            Log.d("Odnoklassniki", "  Quality: ${video.name} -> $quality")
             callback.invoke(
                 newExtractorLink(
                     source  = this.name,

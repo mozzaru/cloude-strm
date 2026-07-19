@@ -278,12 +278,14 @@ class Anichin : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = browserHeaders).document
         document.select(".mobius option").amap { server ->
             val base64 = server.attr("value")
-            val decoded = base64Decode(base64)
+            if (base64.isBlank()) return@amap
+            val decoded = try { base64Decode(base64) } catch (_: Exception) { return@amap }
             val doc = Jsoup.parse(decoded)
             val href = doc.select("iframe").attr("src")
+            if (href.isBlank()) return@amap
             val url = httpsify(href)
             loadExtractor(url, subtitleCallback, callback)
         }
