@@ -149,18 +149,17 @@ class Anichin : MainAPI() {
      *     Indonesia, jangan lupa mengklik tombol like dan share ya...") sitting near
      *     the player, marked up as `div.entry-content` (no itemprop, plain class).
      *  2. The actual synopsis, living in `div.desc.mindes` — a sibling of
-     *     `div.genxed` (the genre tags) inside `div.info-content` — prefixed by a
-     *     heading that repeats the anime's title (e.g. "A Good Day to Ascend [择日飞升]")
-     *     rather than the word "Sinopsis", and containing the real plot text in a
-     *     child `<p>`.
-     * Verified directly against the live page's HTML (2026-07); `div.desc.mindes p`
-     * is the one selector that isolates block 2 without picking up block 1's text or
-     * the leading title/native-title heading.
+     *     `div.genxed` (the genre tags) inside `div.info-content`. Its DOM shape is
+     *     `<h4>{title} [{native title}]</h4>` followed by a *bare text node* (not a
+     *     `<p>`) holding the real synopsis, followed by an empty `<span class="colap">`
+     *     (a "read more" toggle). `select("p")` finds nothing here, so `ownText()` is
+     *     required to grab that bare text node while excluding the h4/span text.
+     * Verified directly against the live page's HTML (2026-07).
      */
     private fun extractSinopsis(doc: Document): String? {
         val container = doc.selectFirst("div.desc.mindes")
-        val paragraphs = container?.select("p")?.map { it.text().trim() }?.filter { it.isNotBlank() }
-        if (!paragraphs.isNullOrEmpty()) return paragraphs.joinToString("\n\n")
+        val fromOwnText = container?.ownText()?.trim()
+        if (!fromOwnText.isNullOrBlank()) return fromOwnText
 
         val heading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
             it.text().trim().startsWith("Sinopsis", ignoreCase = true)
