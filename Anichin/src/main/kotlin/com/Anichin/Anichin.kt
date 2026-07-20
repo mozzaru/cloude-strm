@@ -143,6 +143,28 @@ class Anichin : MainAPI() {
         return fixUrlNull(fixed)
     }
 
+    /**
+     * Anichin renders two separate Indonesian text blocks on a series/episode page:
+     *  1. A generic SEO blurb ("Tonton streaming X Subtitle Indonesia di Anichin...")
+     *     which appears *before* the share buttons.
+     *  2. The actual synopsis, under a heading "Sinopsis {Judul}" ("## Sinopsis EMBERS"),
+     *     which appears *after* the share buttons.
+     *
+     * A combined selector like `div.entry-content, div.desc` with selectFirst() grabs
+     * whichever of these matches first in document order, which is usually the SEO
+     * blurb, not the real synopsis. Instead, locate the "Sinopsis" heading directly and
+     * read the text that follows it, falling back to the old selector only if that fails.
+     */
+    private fun extractSinopsis(doc: Document): String? {
+        val heading = doc.select("h1, h2, h3, h4").firstOrNull {
+            it.text().trim().startsWith("Sinopsis", ignoreCase = true)
+        }
+        val fromHeading = heading?.nextElementSibling()?.text()?.trim()
+        if (!fromHeading.isNullOrBlank()) return fromHeading
+
+        return doc.selectFirst("div.entry-content, div.desc")?.text()?.trim()
+    }
+
     private fun parseEpisodeFromSpan(spanText: String, h3Text: String): Pair<Int?, String?> {
         val parts   = spanText.split(" - ")
         val epsPart = parts.getOrNull(0)?.trim() ?: ""
@@ -181,7 +203,7 @@ class Anichin : MainAPI() {
             val poster = epDoc.selectFirst("div.thumb img")?.attr("src")
                 ?: epDoc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
-            val description = epDoc.selectFirst("div.entry-content")?.text()?.trim()
+            val description = extractSinopsis(epDoc)
             val genres      = epDoc.select("div.genxed a").map { it.text().trim() }
             val showStatus  = parseShowStatus(epDoc.select("div.spe span").map { it.text() })
 
@@ -221,7 +243,7 @@ class Anichin : MainAPI() {
         val poster = document.selectFirst("div.thumb img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
-        val description = document.selectFirst("div.entry-content, div.desc")?.text()?.trim()
+        val description = extractSinopsis(document)
         val genres      = document.select("div.genxed a").map { it.text().trim() }
         val showStatus  = parseShowStatus(document.select("div.spe span").map { it.text() })
 
