@@ -147,19 +147,20 @@ class Anichin : MainAPI() {
      * Anichin renders two separate Indonesian text blocks on a series/episode page:
      *  1. A generic SEO blurb ("Download X Subtitle Indonesia, Nonton X Subtitle
      *     Indonesia, jangan lupa mengklik tombol like dan share ya...") sitting near
-     *     the player.
-     *  2. The actual synopsis, in the info card together with Status/Genres, under a
+     *     the player, marked up as `div.entry-content` (no itemprop, plain class).
+     *  2. The actual synopsis, living in `div.desc.mindes` — a sibling of
+     *     `div.genxed` (the genre tags) inside `div.info-content` — prefixed by a
      *     heading that repeats the anime's title (e.g. "A Good Day to Ascend [择日飞升]")
-     *     rather than the word "Sinopsis" — that heading text does not exist on current
-     *     pages, so matching on it always falls through to the SEO blurb.
-     *
-     * The real synopsis block carries the schema.org `itemprop="description"` marker;
-     * the SEO blurb does not. Anchor on that instead of the heading text, and keep the
-     * old heading/selector logic only as a last-resort fallback.
+     *     rather than the word "Sinopsis", and containing the real plot text in a
+     *     child `<p>`.
+     * Verified directly against the live page's HTML (2026-07); `div.desc.mindes p`
+     * is the one selector that isolates block 2 without picking up block 1's text or
+     * the leading title/native-title heading.
      */
     private fun extractSinopsis(doc: Document): String? {
-        val fromItemprop = doc.selectFirst("div.entry-content[itemprop=description]")?.text()?.trim()
-        if (!fromItemprop.isNullOrBlank()) return fromItemprop
+        val container = doc.selectFirst("div.desc.mindes")
+        val paragraphs = container?.select("p")?.map { it.text().trim() }?.filter { it.isNotBlank() }
+        if (!paragraphs.isNullOrEmpty()) return paragraphs.joinToString("\n\n")
 
         val heading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
             it.text().trim().startsWith("Sinopsis", ignoreCase = true)
@@ -170,7 +171,22 @@ class Anichin : MainAPI() {
         return doc.selectFirst("div.entry-content, div.desc")?.text()?.trim()
     }
 
-    private fun parseEpisodeFromSpan(spanText: String, h3Text: String): Pair<Int?, String?> {
+    /**
+     * Anichin always renders episode air dates in English month names, e.g. "July 18, 2026"
+     * — verified against both `div.epl-date` (series page) and the tail of `div.playinfo span`
+     * (episode page, "Eps 03 - July 18, 2026") via live HTML inspection (2026-07).
+     */
+    private fun parseEnglishDate(dateText: String?): Long? {
+        if (dateText.isNullOrBlank()) return null
+        return try {
+            java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.ENGLISH)
+                .parse(dateText.trim())?.time
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun parseEpisodeFromSpan(spanText: String, h3Text: String): Triple<Int?, String?, Long?> {
         val parts   = spanText.split(" - ")
         val epsPart = parts.getOrNull(0)?.trim() ?: ""
         var epNum = Regex("\\d+").find(epsPart)?.value?.toIntOrNull()
@@ -182,10 +198,10 @@ class Anichin : MainAPI() {
             "^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d"
         )
         val secondPart = parts.getOrNull(1)?.trim()
-        val epTheme = if (secondPart != null && !datePattern.containsMatchIn(secondPart)) {
-            secondPart.ifBlank { null }
-        } else null
-        return Pair(epNum, epTheme)
+        val isDate = secondPart != null && datePattern.containsMatchIn(secondPart)
+        val epTheme = if (secondPart != null && !isDate) secondPart.ifBlank { null } else null
+        val epDate  = if (isDate) parseEnglishDate(secondPart) else null
+        return Triple(epNum, epTheme, epDate)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -220,7 +236,7 @@ class Anichin : MainAPI() {
                 if (!seenIds.add(dataId)) return@mapNotNull null
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
                 val h3Text   = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
-                val (epNum, epTheme) = parseEpisodeFromSpan(spanText, h3Text)
+                val (epNum, epTheme, epDate) = parseEpisodeFromSpan(spanText, h3Text)
                 val epPoster = li.selectFirst("div.thumbnel img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
@@ -228,6 +244,7 @@ class Anichin : MainAPI() {
                     this.name      = epTheme
                     this.episode   = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
+                    this.date      = epDate
                 }
             }.reversed()
 
@@ -265,6 +282,7 @@ class Anichin : MainAPI() {
                 val epNumRaw = li.selectFirst("div.epl-num")?.text()?.trim() ?: ""
                 val epNum    = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
                 val epTitle  = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
+                val epDate   = parseEnglishDate(li.selectFirst("div.epl-date")?.text()?.trim())
                 val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
@@ -272,6 +290,7 @@ class Anichin : MainAPI() {
                     this.name      = epTitle
                     this.episode   = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
+                    this.date      = epDate
                 }
             }.reversed()
         } else {
