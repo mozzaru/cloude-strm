@@ -145,18 +145,23 @@ class Anichin : MainAPI() {
 
     /**
      * Anichin renders two separate Indonesian text blocks on a series/episode page:
-     *  1. A generic SEO blurb ("Tonton streaming X Subtitle Indonesia di Anichin...")
-     *     which appears *before* the share buttons.
-     *  2. The actual synopsis, under a heading "Sinopsis {Judul}" ("## Sinopsis EMBERS"),
-     *     which appears *after* the share buttons.
+     *  1. A generic SEO blurb ("Download X Subtitle Indonesia, Nonton X Subtitle
+     *     Indonesia, jangan lupa mengklik tombol like dan share ya...") sitting near
+     *     the player.
+     *  2. The actual synopsis, in the info card together with Status/Genres, under a
+     *     heading that repeats the anime's title (e.g. "A Good Day to Ascend [择日飞升]")
+     *     rather than the word "Sinopsis" — that heading text does not exist on current
+     *     pages, so matching on it always falls through to the SEO blurb.
      *
-     * A combined selector like `div.entry-content, div.desc` with selectFirst() grabs
-     * whichever of these matches first in document order, which is usually the SEO
-     * blurb, not the real synopsis. Instead, locate the "Sinopsis" heading directly and
-     * read the text that follows it, falling back to the old selector only if that fails.
+     * The real synopsis block carries the schema.org `itemprop="description"` marker;
+     * the SEO blurb does not. Anchor on that instead of the heading text, and keep the
+     * old heading/selector logic only as a last-resort fallback.
      */
     private fun extractSinopsis(doc: Document): String? {
-        val heading = doc.select("h1, h2, h3, h4").firstOrNull {
+        val fromItemprop = doc.selectFirst("div.entry-content[itemprop=description]")?.text()?.trim()
+        if (!fromItemprop.isNullOrBlank()) return fromItemprop
+
+        val heading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
             it.text().trim().startsWith("Sinopsis", ignoreCase = true)
         }
         val fromHeading = heading?.nextElementSibling()?.text()?.trim()
