@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.TextNode
 
 class Anichin : MainAPI() {
     override var mainUrl = "https://anichin.moe"
@@ -144,22 +145,52 @@ class Anichin : MainAPI() {
     }
 
     /**
-     * Anichin renders two separate Indonesian text blocks on a series/episode page:
-     *  1. A generic SEO blurb ("Download X Subtitle Indonesia, Nonton X Subtitle
-     *     Indonesia, jangan lupa mengklik tombol like dan share ya...") sitting near
-     *     the player, marked up as `div.entry-content` (no itemprop, plain class).
-     *  2. The actual synopsis, living in `div.desc.mindes` — a sibling of
-     *     `div.genxed` (the genre tags) inside `div.info-content`. Its DOM shape is
-     *     `<h4>{title} [{native title}]</h4>` followed by a *bare text node* (not a
-     *     `<p>`) holding the real synopsis, followed by an empty `<span class="colap">`
-     *     (a "read more" toggle). `select("p")` finds nothing here, so `ownText()` is
-     *     required to grab that bare text node while excluding the h4/span text.
-     * Verified directly against the live page's HTML (2026-07).
+     * Anichin's real synopsis lives in `div.desc.mindes`, but its internal markup is
+     * NOT consistent across pages — confirmed by inspecting several live pages (2026-07):
+     *  - `<h4>Title [Native]</h4>` + a bare text node holding the synopsis
+     *  - just a `<p>` with the synopsis (no title heading at all)
+     *  - a single `<h4>[Title]synopsis</h4>` with title and synopsis run together
+     *  - two `<h4>`s: one holding only `[Title]`, the next holding the real synopsis
+     *  - two `<h5>`s: one holding `"Title - synopsis"` (dash-joined), the next a note
+     * All variants end with an empty `<span class="colap">` (a "read more" toggle).
+     * Some titles (freshly-added ones) have no `div.desc.mindes` or `div.desc` at all —
+     * the site genuinely hasn't published a synopsis yet, not a scraping bug.
+     *
+     * Rather than match a specific tag shape, this walks every direct child, drops any
+     * child whose entire text is just the title (handles the "title-only heading"
+     * variant), then strips a leading "{title}", "[{title}]", "{title} [{native}]", or
+     * "{title} - " prefix from whatever's left (handles the "title glued to synopsis"
+     * variants). A `<p>`-only block with no title text passes through untouched.
      */
-    private fun extractSinopsis(doc: Document): String? {
+    private fun extractSinopsis(doc: Document, title: String): String? {
         val container = doc.selectFirst("div.desc.mindes")
-        val fromOwnText = container?.ownText()?.trim()
-        if (!fromOwnText.isNullOrBlank()) return fromOwnText
+        if (container != null) {
+            val cleanTitle = title.trim()
+            val titleOnlyPattern = if (cleanTitle.isNotBlank())
+                Regex("""^\[?\Q$cleanTitle\E\]?$""", RegexOption.IGNORE_CASE) else null
+            val leadingTitlePattern = if (cleanTitle.isNotBlank())
+                Regex("""^\[?\Q$cleanTitle\E\]?(?:\s*\[[^\]]*])?\s*(?:-\s*)?""", RegexOption.IGNORE_CASE)
+                else null
+
+            val segments = mutableListOf<String>()
+            for (node in container.childNodes()) {
+                val text = when {
+                    node is TextNode -> node.text().trim()
+                    node is Element && node.tagName().equals("span", true) && node.hasClass("colap") -> ""
+                    node is Element -> node.text().trim()
+                    else -> ""
+                }
+                if (text.isBlank()) continue
+                if (titleOnlyPattern?.matches(text) == true) continue
+                segments.add(text)
+            }
+
+            if (segments.isNotEmpty()) {
+                leadingTitlePattern?.let { segments[0] = it.replaceFirst(segments[0], "").trim() }
+                val result = segments.filter { it.isNotBlank() }.joinToString("\n\n")
+                if (result.isNotBlank()) return result
+            }
+        }
 
         val heading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
             it.text().trim().startsWith("Sinopsis", ignoreCase = true)
@@ -223,7 +254,7 @@ class Anichin : MainAPI() {
             val poster = epDoc.selectFirst("div.thumb img")?.attr("src")
                 ?: epDoc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
-            val description = extractSinopsis(epDoc)
+            val description = extractSinopsis(epDoc, title)
             val genres      = epDoc.select("div.genxed a").map { it.text().trim() }
             val showStatus  = parseShowStatus(epDoc.select("div.spe span").map { it.text() })
 
@@ -264,7 +295,7 @@ class Anichin : MainAPI() {
         val poster = document.selectFirst("div.thumb img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
-        val description = extractSinopsis(document)
+        val description = extractSinopsis(document, title)
         val genres      = document.select("div.genxed a").map { it.text().trim() }
         val showStatus  = parseShowStatus(document.select("div.spe span").map { it.text() })
 
