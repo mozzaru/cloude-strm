@@ -349,15 +349,10 @@ class Donghub : MainAPI() {
 
         Log.i(TAG, "Server options found: ${options.size}")
 
-        // Mega.nz butuh kerja jauh lebih berat dibanding server lain (call API
-        // Mega + bikin ServerSocket + start thread pool proxy) - kalau ini
-        // diresolve BERSAMAAN (paralel) dengan server ringan lain lewat amap,
-        // semuanya rebutan CPU/network tepat di jendela waktu kritis saat
-        // player mulai coba init decoder untuk server yang auto-play. Di HP
-        // yang resource-nya pas-pasan ini bisa bikin init decoder server LAIN
-        // gagal (DECODER_INIT_FAILED), walau errornya kelihatan di server itu,
-        // bukan di Mega. Jadi Mega dipisah, diresolve belakangan - server lain
-        // tetap paralel/cepat seperti biasa.
+        // Keep Mega resolution separate from normal sources. The proxy setup
+        // (API + localhost socket) is done before normal callbacks, but it does
+        // not download media until the user selects Mega. Callback ordering is
+        // intentional: CloudStream shows later callbacks above earlier ones.
         val megaOptions = mutableListOf<Pair<String, String>>()   // serverLabel to decoded
         val otherOptions = mutableListOf<Pair<String, String>>()
 
@@ -408,13 +403,20 @@ class Donghub : MainAPI() {
             loadExtractor(finalUrl, data, subtitleCallback, callback)
         }
 
-        // Server ringan (non-Mega) - paralel seperti biasa, cepat.
-        otherOptions.amap { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
-
-        // Mega - belakangan, sendiri-sendiri (sequential), supaya tidak
-        // rebutan resource dengan proses di atas / dengan player yang sedang
-        // coba mulai playback server lain.
+        // CloudStream inserts each callback at the top of the source picker.
+        // Resolve Mega FIRST so its callback is inserted first and later
+        // DTube/Dailymotion callbacks stay above it. This makes a lightweight
+        // remote source the default instead of auto-selecting the local Mega
+        // proxy whenever the episode is opened.
+        //
+        // Starting a Mega proxy does not fetch video bytes; CDN traffic begins
+        // only after ExoPlayer actually selects its localhost URL.
         megaOptions.forEach { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
+
+        // Resolve the normal streaming sources after Mega. They remain parallel
+        // with each other, but their callbacks deliberately arrive last so they
+        // occupy the first/default positions in the picker.
+        otherOptions.amap { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
 
         Log.i(TAG, "=== loadLinks done ===")
         return true
