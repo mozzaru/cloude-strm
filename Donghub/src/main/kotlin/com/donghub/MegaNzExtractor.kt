@@ -35,10 +35,12 @@ class MegaNzExtractor : ExtractorApi() {
         // Max CDN fetch per seek - 8MB enough for initial prefetch
         private const val MAX_CDN_FETCH = 8L * 1024 * 1024
 
-        // Proxy yang tidak ada aktivitas sama sekali selama ini akan self-stop
-        // (lihat MegaStreamProxy.acceptLoop) - jaring pengaman kalau extractor
-        // lain gagal memanggil stopAll() saat user pindah server.
-        private const val IDLE_TIMEOUT_MS = 30_000L
+        // Keep the local URL alive long enough for a user to switch from Mega
+        // to DTube/Dailymotion and back. No CDN request is kept alive when the
+        // player disconnects, so this idle ServerSocket is cheap; it only
+        // reserves one local port and a daemon accept task. A new Mega
+        // extraction still calls stopAll(), so old episode proxies are removed.
+        private const val IDLE_TIMEOUT_MS = 5 * 60_000L
 
         private val httpClient by lazy {
             OkHttpClient.Builder()
