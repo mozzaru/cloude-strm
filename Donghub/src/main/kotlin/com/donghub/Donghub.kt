@@ -349,21 +349,37 @@ class Donghub : MainAPI() {
 
         Log.i(TAG, "Server options found: ${options.size}")
 
-        options.amap { server ->
+        // Mega.nz butuh kerja jauh lebih berat dibanding server lain (call API
+        // Mega + bikin ServerSocket + start thread pool proxy) - kalau ini
+        // diresolve BERSAMAAN (paralel) dengan server ringan lain lewat amap,
+        // semuanya rebutan CPU/network tepat di jendela waktu kritis saat
+        // player mulai coba init decoder untuk server yang auto-play. Di HP
+        // yang resource-nya pas-pasan ini bisa bikin init decoder server LAIN
+        // gagal (DECODER_INIT_FAILED), walau errornya kelihatan di server itu,
+        // bukan di Mega. Jadi Mega dipisah, diresolve belakangan - server lain
+        // tetap paralel/cepat seperti biasa.
+        val megaOptions = mutableListOf<Pair<String, String>>()   // serverLabel to decoded
+        val otherOptions = mutableListOf<Pair<String, String>>()
+
+        options.forEach { server ->
             val serverLabel = server.text().trim()
             val base64 = server.attr("value").trim()
-
             if (base64.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — base64 blank")
-                return@amap
+                return@forEach
             }
-
             val decoded = base64Decode(base64)
             if (decoded.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — decode result blank")
-                return@amap
+                return@forEach
             }
+            val looksLikeMega = decoded.contains("mega.nz", ignoreCase = true) ||
+                decoded.contains("mega.co.nz", ignoreCase = true)
+            if (looksLikeMega) megaOptions.add(serverLabel to decoded)
+            else otherOptions.add(serverLabel to decoded)
+        }
 
+        suspend fun resolveOne(serverLabel: String, decoded: String) {
             val doc = Jsoup.parse(decoded)
 
             val src = doc.selectFirst("iframe")
@@ -375,7 +391,7 @@ class Donghub : MainAPI() {
 
             if (src.isBlank()) {
                 Log.w(TAG, "[$serverLabel] Skipped — no src found")
-                return@amap
+                return
             }
 
             val finalUrl = when {
@@ -383,7 +399,7 @@ class Donghub : MainAPI() {
                 src.startsWith("//")   -> "https:$src"
                 else -> {
                     Log.w(TAG, "[$serverLabel] Skipped — invalid URL format: $src")
-                    return@amap
+                    return
                 }
             }
 
@@ -391,6 +407,14 @@ class Donghub : MainAPI() {
             Log.d(TAG, "[$serverLabel] ▶ loadExtractor")
             loadExtractor(finalUrl, data, subtitleCallback, callback)
         }
+
+        // Server ringan (non-Mega) - paralel seperti biasa, cepat.
+        otherOptions.amap { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
+
+        // Mega - belakangan, sendiri-sendiri (sequential), supaya tidak
+        // rebutan resource dengan proses di atas / dengan player yang sedang
+        // coba mulai playback server lain.
+        megaOptions.forEach { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
 
         Log.i(TAG, "=== loadLinks done ===")
         return true
