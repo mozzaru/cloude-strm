@@ -35,6 +35,11 @@ class MegaNzExtractor : ExtractorApi() {
         // Max CDN fetch per seek - 8MB enough for initial prefetch
         private const val MAX_CDN_FETCH = 8L * 1024 * 1024
 
+        // Proxy yang tidak ada aktivitas sama sekali selama ini akan self-stop
+        // (lihat MegaStreamProxy.acceptLoop) - jaring pengaman kalau extractor
+        // lain gagal memanggil stopAll() saat user pindah server.
+        private const val IDLE_TIMEOUT_MS = 30_000L
+
         private val httpClient by lazy {
             OkHttpClient.Builder()
                 .followRedirects(true)
@@ -44,9 +49,11 @@ class MegaNzExtractor : ExtractorApi() {
                 .build()
         }
 
-        // 8 threads for concurrent client handling
+        // 16 threads (naik dari 8) untuk beri ruang lebih kalau ada proxy lama
+        // yang belum sempat dibersihkan - kombinasi dengan self-expiry di atas
+        // supaya thread tidak pernah benar-benar habis/leak permanen.
         private val proxyExecutor by lazy {
-            Executors.newFixedThreadPool(8) { r ->
+            Executors.newFixedThreadPool(16) { r ->
                 Thread(r, "mega-proxy-${System.nanoTime() % 100}").also {
                     it.isDaemon = true
                 }
@@ -63,6 +70,8 @@ class MegaNzExtractor : ExtractorApi() {
          */
         fun stopAll() {
             synchronized(activeProxies) {
+                val n = activeProxies.size
+                if (n > 0) Log.i(TAG, "stopAll(): menghentikan $n proxy aktif")
                 activeProxies.toList().forEach { it.stop() }
                 activeProxies.clear()
             }
@@ -132,6 +141,45 @@ class MegaNzExtractor : ExtractorApi() {
             }
         }
 
+        /**
+         * Sama seperti getFileInfo, tapi blocking (pakai httpClient langsung)
+         * karena dipanggil dari MegaStreamProxy yang berjalan di thread biasa
+         * (proxyExecutor), bukan coroutine, jadi tidak bisa suspend.
+         */
+        fun fetchFileInfoBlocking(nodeId: String, maxAttempts: Int = 2): JsonObject? {
+            var delayMs = 500L
+            repeat(maxAttempts) { attempt ->
+                try {
+                    val resp = httpClient.newCall(
+                        Request.Builder()
+                            .url("$MEGA_API?id=1")
+                            .post("""[{"a":"g","g":1,"p":"$nodeId"}]"""
+                                .toRequestBody("application/json".toMediaType()))
+                            .header("Content-Type", "application/json")
+                            .header("Origin",  "https://mega.nz")
+                            .header("Referer", "https://mega.nz/")
+                            .build()
+                    ).execute()
+                    val text = resp.body?.string().orEmpty()
+                    resp.close()
+                    val arr = Json.parseToJsonElement(text).jsonArray
+                    if (arr.isNotEmpty() && arr[0] is JsonObject) {
+                        return arr[0].jsonObject
+                    }
+                    val code = if (arr.isNotEmpty()) arr[0].jsonPrimitive.intOrNull else null
+                    Log.w(TAG, "fetchFileInfoBlocking: Mega error code $code (attempt ${attempt + 1})")
+                    if (code != null && code != -3) return null
+                } catch (e: Exception) {
+                    Log.w(TAG, "fetchFileInfoBlocking failed (attempt ${attempt + 1}): ${e.message}")
+                }
+                if (attempt < maxAttempts - 1) {
+                    Thread.sleep(delayMs)
+                    delayMs *= 2
+                }
+            }
+            return null
+        }
+
         fun qualityLabel(quality: Int): String = when (quality) {
             Qualities.P2160.value -> "2160p"
             Qualities.P1080.value -> "1080p"
@@ -166,8 +214,13 @@ class MegaNzExtractor : ExtractorApi() {
         }
     }
 
-    private suspend fun getFileInfo(nodeId: String): JsonObject? = try {
-        Log.d(TAG, "Fetching file info for: $nodeId")
+    /**
+     * Ambil satu kali info file dari Mega API.
+     * Mega API bisa balas array berisi int (kode error, mis. -3 = temp
+     * unavailable, -9 = not found, -11 = access denied) alih-alih object.
+     * Return Pair(fileInfo, errorCode) - salah satu selalu null.
+     */
+    private suspend fun getFileInfoOnce(nodeId: String): Pair<JsonObject?, Int?> = try {
         val resp = app.post(
             "$MEGA_API?id=1",
             headers = mapOf(
@@ -178,20 +231,53 @@ class MegaNzExtractor : ExtractorApi() {
             requestBody = """[{"a":"g","g":1,"p":"$nodeId"}]"""
                 .toRequestBody("application/json".toMediaType())
         )
-        
+
         Log.d(TAG, "API response: ${resp.text.take(200)}")
-        
+
         val arr = Json.parseToJsonElement(resp.text).jsonArray
-        if (arr.isNotEmpty() && arr[0] is JsonObject) {
-            Log.i(TAG, "File info retrieved successfully")
-            arr[0].jsonObject
-        } else {
-            Log.w(TAG, "Empty or invalid API response")
-            null
+        when {
+            arr.isEmpty() -> {
+                Log.w(TAG, "Empty API response")
+                Pair(null, null)
+            }
+            arr[0] is JsonObject -> Pair(arr[0].jsonObject, null)
+            else -> {
+                val code = arr[0].jsonPrimitive.intOrNull
+                Log.w(TAG, "Mega API returned error code: $code")
+                Pair(null, code)
+            }
         }
     } catch (e: Exception) {
         Log.e(TAG, "getFileInfo error: ${e.message}")
-        null
+        Pair(null, null)
+    }
+
+    /**
+     * Retry dengan backoff. -3 (RequestFailedRetry / temp unavailable) hampir selalu
+     * pulih dalam beberapa detik menurut dokumentasi Mega, jadi layak diretry.
+     * Kode error lain (mis. -9 not found, -11 access denied) tidak diretry - langsung gagal.
+     */
+    private suspend fun getFileInfo(nodeId: String, maxAttempts: Int = 4): JsonObject? {
+        var delayMs = 500L
+        repeat(maxAttempts) { attempt ->
+            Log.d(TAG, "Fetching file info for: $nodeId (attempt ${attempt + 1}/$maxAttempts)")
+            val (info, errorCode) = getFileInfoOnce(nodeId)
+            if (info != null) {
+                Log.i(TAG, "File info retrieved successfully")
+                return info
+            }
+            if (errorCode != null && errorCode != -3) {
+                Log.e(TAG, "Non-retryable Mega error code $errorCode, giving up")
+                return null
+            }
+            if (attempt < maxAttempts - 1) {
+                Log.w(TAG, "Retrying getFileInfo in ${delayMs}ms...")
+                kotlinx.coroutines.delay(delayMs)
+                delayMs = (delayMs * 2).coerceAtMost(4000L)
+            }
+        }
+        Log.e(TAG, "getFileInfo failed after $maxAttempts attempts")
+        return null
     }
 
     override suspend fun getUrl(
@@ -227,25 +313,20 @@ class MegaNzExtractor : ExtractorApi() {
         Log.d(TAG, "AES key decoded successfully")
 
         Log.d(TAG, "Calling getFileInfo...")
-        val finfo = getFileInfo(nodeId) ?: run {
-            Log.w(TAG, "API failed -> raw fallback")
-            val fallbackUrl = normaliseUrl(url)
-            Log.i(TAG, "Returning fallback URL: $fallbackUrl")
-            callback.invoke(newExtractorLink(
-                source = name, 
-                name = "$name",
-                url = fallbackUrl, 
-                type = ExtractorLinkType.VIDEO
-            ) {
-                this.quality = Qualities.Unknown.value
-                this.referer = "$mainUrl/"
-            })
+        // getFileInfo sendiri sudah retry dengan backoff untuk error transient (-3).
+        // Fallback URL mentah (link mega.nz/file/... langsung) DIHAPUS karena tidak
+        // pernah bisa diputar oleh ExoPlayer (file terenkripsi, bukan file media
+        // langsung) - itu penyebab "loading lalu error" saat balik ke server Mega:
+        // link yang diberikan ke player memang tidak pernah valid.
+        val finfo = getFileInfo(nodeId)
+        if (finfo == null) {
+            Log.e(TAG, "getFileInfo gagal total setelah retry, tidak ada link yang bisa diberikan")
             return
         }
 
-        val cdnUrl   = finfo["g"]?.jsonPrimitive?.contentOrNull ?: run {
-            Log.e(TAG, "No CDN URL in response!")
-            Log.d(TAG, "Response keys: ${finfo.keys.joinToString()}")
+        val cdnUrl = finfo["g"]?.jsonPrimitive?.contentOrNull
+        if (cdnUrl == null) {
+            Log.e(TAG, "No CDN URL in response! keys=${finfo.keys.joinToString()}")
             return
         }
         
@@ -260,14 +341,6 @@ class MegaNzExtractor : ExtractorApi() {
         Log.i(TAG, "File: '$fileName'  size=${fileSize / 1024 / 1024} MB  ext=$ext  quality=$label")
         Log.d(TAG, "CDN URL: ${cdnUrl.take(80)}...")
 
-        // Stop semua proxy lama sebelum buat yang baru
-        // Ini juga dipanggil dari extractor lain (DTube, CustomDailymotion) via stopAll()
-        Log.d(TAG, "Stopping old proxies before starting new one...")
-        synchronized(activeProxies) {
-            activeProxies.toList().forEach { it.stop() }
-            activeProxies.clear()
-        }
-
         Log.d(TAG, "Starting proxy server...")
         val proxy = MegaStreamProxy(
             nodeId = nodeId,
@@ -279,7 +352,10 @@ class MegaNzExtractor : ExtractorApi() {
         )
         val port = proxy.start()
 
-        synchronized(activeProxies) { activeProxies.add(proxy) }
+        synchronized(activeProxies) {
+            activeProxies.add(proxy)
+            Log.i(TAG, "[:$port] terdaftar di activeProxies, total aktif=${activeProxies.size}")
+        }
 
         val playUrl = "http://127.0.0.1:$port/video.$ext"
         Log.i(TAG, "Proxy started on port $port -> $playUrl")
@@ -309,13 +385,39 @@ class MegaNzExtractor : ExtractorApi() {
     ) {
         private var serverSocket : ServerSocket? = null
         private val stopped = AtomicBoolean(false)
-        
+
+        // Port dipakai buat prefix log (mis. "[:41231]") supaya kalau ada
+        // lebih dari satu proxy hidup bersamaan (indikasi leak), log tiap
+        // instance bisa dibedakan di logcat.
+        @Volatile private var port: Int = -1
+        private fun tag() = "[:$port]"
+
+        // Lacak koneksi/response yang sedang aktif supaya stop() bisa
+        // memaksa tutup semua, tidak cuma serverSocket - ini penting karena
+        // thread yang lagi blocking di client.read()/encStream.read() TIDAK
+        // akan pernah cek flag `stopped`, jadi tidak akan pernah keluar
+        // sampai socket-nya sendiri ditutup paksa. Sebelumnya thread begini
+        // menggantung selamanya dan menghabiskan slot di proxyExecutor (cuma
+        // 8 thread untuk SELURUH proxy Mega yang pernah dibuat) - itulah
+        // kenapa server lain juga ikut error setelah beberapa kali gonta-ganti
+        // dari/ke Mega: pool thread-nya sudah habis oleh proxy lama yang
+        // tidak pernah benar-benar mati.
+        private val clientSockets = java.util.Collections.synchronizedSet(mutableSetOf<java.net.Socket>())
+        private val cdnResponses  = java.util.Collections.synchronizedSet(mutableSetOf<okhttp3.Response>())
+
+        // Kalau tidak ada aktivitas sama sekali selama IDLE_TIMEOUT_MS (mis.
+        // extractor lain lupa/gagal memanggil stopAll() saat user pindah
+        // server), proxy ini bunuh diri sendiri supaya port & thread-nya
+        // dilepas - jadi tidak bergantung 100% ke kerja sama extractor lain.
+        @Volatile private var lastActivityMs = System.currentTimeMillis()
+
         fun start(): Int {
-            var port = 0
+            var p = 0
             try {
                 serverSocket = ServerSocket(0)
-                port = serverSocket!!.localPort
-                Log.d(TAG, "Server socket created on port $port")
+                p = serverSocket!!.localPort
+                port = p
+                Log.d(TAG, "${tag()} Server socket created on port $p")
                 
                 proxyExecutor.execute {
                     acceptLoop()
@@ -323,38 +425,70 @@ class MegaNzExtractor : ExtractorApi() {
             } catch (e: Exception) {
                 Log.e(TAG, "Server start failed: ${e.message}")
             }
-            return port
+            return p
         }
         
         fun stop() {
-            stopped.set(true)
+            if (stopped.getAndSet(true)) {
+                Log.d(TAG, "${tag()} stop() dipanggil lagi (sudah stopped sebelumnya), no-op")
+                return
+            }
             try {
                 serverSocket?.close()
             } catch (_: Exception) {}
+            val closedClients = synchronized(clientSockets) {
+                val n = clientSockets.size
+                clientSockets.forEach { try { it.close() } catch (_: Exception) {} }
+                clientSockets.clear()
+                n
+            }
+            val closedResponses = synchronized(cdnResponses) {
+                val n = cdnResponses.size
+                cdnResponses.forEach { try { it.close() } catch (_: Exception) {} }
+                cdnResponses.clear()
+                n
+            }
+            Log.i(TAG, "${tag()} stop(): $closedClients client socket & $closedResponses CDN response dipaksa tutup")
         }
         
         private fun acceptLoop() {
             try { serverSocket?.soTimeout = 200 } catch (_: Exception) {}
+            Log.d(TAG, "${tag()} acceptLoop dimulai")
             while (!stopped.get()) {
                 try {
                     val client = serverSocket!!.accept()
+                    lastActivityMs = System.currentTimeMillis()
+                    clientSockets.add(client)
+                    Log.d(TAG, "${tag()} client connect dari ${client.remoteSocketAddress}, total client aktif=${clientSockets.size}")
                     proxyExecutor.execute { handleClient(client) }
                 } catch (e: java.net.SocketTimeoutException) {
                     // normal wakeup to re-check stopped flag
+                    val idleFor = System.currentTimeMillis() - lastActivityMs
+                    if (idleFor > IDLE_TIMEOUT_MS) {
+                        Log.w(TAG, "${tag()} idle ${idleFor}ms > ${IDLE_TIMEOUT_MS}ms tanpa aktivitas, self-stop")
+                        stop()
+                        synchronized(activeProxies) {
+                            activeProxies.remove(this@MegaStreamProxy)
+                            Log.i(TAG, "${tag()} dihapus dari activeProxies (self-expired), sisa=${activeProxies.size}")
+                        }
+                        break
+                    }
                 } catch (e: Exception) {
-                    if (!stopped.get()) Log.w(TAG, "Accept failed: ${e.message}")
+                    if (!stopped.get()) Log.w(TAG, "${tag()} Accept failed: ${e.message}")
                     break
                 }
             }
+            Log.d(TAG, "${tag()} acceptLoop berhenti (stopped=${stopped.get()})")
         }
         
         private fun handleClient(client: java.net.Socket) {
             try {
+                lastActivityMs = System.currentTimeMillis()
                 val input = client.getInputStream().bufferedReader()
                 val output = BufferedOutputStream(client.getOutputStream())
                 
                 val requestLine = input.readLine() ?: return
-                Log.d(TAG, "Request: $requestLine")
+                Log.d(TAG, "${tag()} Request: $requestLine")
                 
                 val headers = mutableMapOf<String, String>()
                 var line: String?
@@ -368,10 +502,14 @@ class MegaNzExtractor : ExtractorApi() {
                 val contentLength = if (fileSize > 0 && rangeEnd >= 0)
                     rangeEnd - rangeStart + 1 else -1L
 
-                Log.d(TAG, "Range: $rangeStart-$rangeEnd  len=$contentLength")
+                Log.d(TAG, "${tag()} Range: $rangeStart-$rangeEnd  len=$contentLength")
                 streamFromCdn(output, rangeHeader, rangeStart, rangeEnd, contentLength)
             } catch (e: Exception) {
-                Log.w(TAG, "handleClient error: ${e.message}")
+                Log.w(TAG, "${tag()} handleClient error: ${e.message}")
+            } finally {
+                clientSockets.remove(client)
+                try { client.close() } catch (_: Exception) {}
+                Log.d(TAG, "${tag()} client disconnect, total client aktif=${clientSockets.size}")
             }
         }
 
@@ -388,78 +526,38 @@ class MegaNzExtractor : ExtractorApi() {
             val adjustedIv = incrementIv(ctrIv, blockStart)
 
             // Jika rangeEnd eksplisit (ExoPlayer probe/seek), align ke block
-            // boundary berikutnya saja — jangan tambah MAX_CDN_FETCH ekstra
-            // karena itu menyebabkan CDN kirim data jauh melebihi yang
-            // dibutuhkan dan ExoPlayer sering disconnect → DECODER_INIT_FAILED.
-            // Jika open-ended (rangeEnd <= 0), pakai MAX_CDN_FETCH sebagai batas.
+            // boundary berikutnya saja — jangan tambah ekstra karena itu
+            // menyebabkan CDN kirim data jauh melebihi yang dibutuhkan dan
+            // ExoPlayer sering disconnect → DECODER_INIT_FAILED.
+            //
+            // Jika open-ended (rangeEnd <= 0, ini request normal playback),
+            // dulu dibatasi MAX_CDN_FETCH (8MB) lalu putus dan reconnect lagi
+            // ke CDN tiap ~8MB - ini penyebab utama "kadang buffering" karena
+            // tiap reconnect = TLS handshake + request baru ke Mega. Sekarang
+            // stream sampai akhir file dalam SATU koneksi selama client masih
+            // terhubung; koneksi otomatis ditutup saat client disconnect/seek
+            // (lihat finally block di bawah).
             val cdnTo = if (rangeEnd > 0) {
                 val aligned = ((rangeEnd / 16) + 1) * 16 - 1
                 if (fileSize > 0) aligned.coerceAtMost(fileSize - 1) else aligned
             } else {
-                val openEnd = cdnFrom + MAX_CDN_FETCH - 1
-                if (fileSize > 0) openEnd.coerceAtMost(fileSize - 1) else openEnd
+                if (fileSize > 0) fileSize - 1 else cdnFrom + MAX_CDN_FETCH - 1
             }
             val cdnRangeHdr = "bytes=$cdnFrom-$cdnTo"
 
-            Log.d(TAG, "CDN range -> $cdnRangeHdr  (blockOffset=$blockOffset)")
+            Log.d(TAG, "${tag()} CDN range -> $cdnRangeHdr  (blockOffset=$blockOffset)")
 
-            val cdnReq = Request.Builder()
-                .url(cdnUrl)
-                .header("User-Agent",
-                    "Mozilla/5.0 (Linux; Android 10; K) " +
-                    "AppleWebKit/537.36 Chrome/149.0.0.0 Mobile Safari/537.36")
-                .header("Origin",  "https://mega.nz")
-                .header("Referer", "https://mega.nz/")
-                .header("Range",   cdnRangeHdr)
-                .build()
+            // Kode HTTP yang layak diretry / URL CDN-nya perlu di-refresh dari Mega API:
+            // 403 = signed URL kadaluarsa, 404 = kadang muncul saat storage node reshuffle,
+            // 429/500/502/503/504 = rate-limit / gangguan sementara di sisi CDN.
+            val refreshableCodes = setOf(403, 404, 429, 500, 502, 503, 504)
+            val maxAttempts = 3
+            var attemptCdnUrl = cdnUrl
+            var cdnResp: okhttp3.Response? = null
 
-            var cdnResp = try {
-                httpClient.newCall(cdnReq).execute()
-            } catch (e: Exception) {
-                Log.w(TAG, "CDN attempt 1 failed: ${e.message}, retrying...")
-                Thread.sleep(1000)
-                try {
-                    httpClient.newCall(cdnReq).execute()
-                } catch (e2: Exception) {
-                    Log.e(TAG, "CDN attempt 2 failed: ${e2.message}")
-                    sendError(output, 502)
-                    return
-                }
-            }
-
-            Log.d(TAG, "CDN response: ${cdnResp.code}")
-
-            if (cdnResp.code == 403) {
-                Log.w(TAG, "CDN returned 403 (URL expired), re-fetching from Mega API...")
-                cdnResp.close()
-                // Re-fetch fresh CDN URL from Mega API
-                val freshInfo = try {
-                    val resp = httpClient.newCall(
-                        Request.Builder()
-                            .url("$MEGA_API?id=1")
-                            .post("""[{"a":"g","g":1,"p":"$nodeId"}]"""
-                                .toRequestBody("application/json".toMediaType()))
-                            .header("Content-Type", "application/json")
-                            .header("Origin",  "https://mega.nz")
-                            .header("Referer", "https://mega.nz/")
-                            .build()
-                    ).execute()
-                    val arr = Json.parseToJsonElement(resp.body!!.string()).jsonArray
-                    if (arr.isNotEmpty() && arr[0] is JsonObject) arr[0].jsonObject else null
-                } catch (e: Exception) {
-                    Log.e(TAG, "Re-fetch CDN URL failed: ${e.message}")
-                    null
-                }
-                val freshCdnUrl = freshInfo?.get("g")?.jsonPrimitive?.contentOrNull
-                if (freshCdnUrl == null) {
-                    Log.e(TAG, "Cannot get fresh CDN URL, giving up")
-                    sendError(output, 503)
-                    return
-                }
-                Log.i(TAG, "Got fresh CDN URL, retrying request")
-                cdnUrl = freshCdnUrl  // update for future requests too
-                val retryReq = Request.Builder()
-                    .url(freshCdnUrl)
+            for (attempt in 1..maxAttempts) {
+                val req = Request.Builder()
+                    .url(attemptCdnUrl)
                     .header("User-Agent",
                         "Mozilla/5.0 (Linux; Android 10; K) " +
                         "AppleWebKit/537.36 Chrome/149.0.0.0 Mobile Safari/537.36")
@@ -467,29 +565,52 @@ class MegaNzExtractor : ExtractorApi() {
                     .header("Referer", "https://mega.nz/")
                     .header("Range",   cdnRangeHdr)
                     .build()
-                cdnResp = try {
-                    httpClient.newCall(retryReq).execute()
+
+                val resp = try {
+                    httpClient.newCall(req).execute()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Retry with fresh CDN URL failed: ${e.message}")
-                    sendError(output, 502)
-                    return
+                    Log.w(TAG, "${tag()} CDN attempt $attempt/$maxAttempts connect failed: ${e.message}")
+                    null
                 }
-                if (cdnResp.code !in listOf(200, 206)) {
-                    Log.e(TAG, "Fresh CDN URL also returned ${cdnResp.code}")
-                    sendError(output, 502)
-                    cdnResp.close()
-                    return
+
+                if (resp != null && resp.code in listOf(200, 206)) {
+                    cdnResp = resp
+                    break
                 }
-            } else if (cdnResp.code !in listOf(200, 206)) {
-                Log.e(TAG, "CDN returned ${cdnResp.code}, giving up")
-                sendError(output, 502)
-                cdnResp.close()
-                return
+
+                if (resp != null) {
+                    Log.w(TAG, "${tag()} CDN attempt $attempt/$maxAttempts returned ${resp.code}")
+                    resp.close()
+                }
+
+                if (attempt == maxAttempts) break
+
+                // Kalau errornya jenis yang biasanya berarti signed URL sudah tidak
+                // valid, ambil URL CDN baru dari Mega API sebelum retry berikutnya.
+                if (resp == null || resp.code in refreshableCodes) {
+                    val freshInfo = fetchFileInfoBlocking(nodeId, maxAttempts = 2)
+                    val freshCdnUrl = freshInfo?.get("g")?.jsonPrimitive?.contentOrNull
+                    if (freshCdnUrl != null) {
+                        Log.i(TAG, "${tag()} Got fresh CDN URL for attempt ${attempt + 1}")
+                        attemptCdnUrl = freshCdnUrl
+                        cdnUrl = freshCdnUrl  // update outer state untuk request berikutnya
+                    }
+                }
+                Thread.sleep(500L * attempt)
             }
 
-            val body = cdnResp.body ?: run {
-                Log.e(TAG, "CDN body null")
+            if (cdnResp == null) {
+                Log.e(TAG, "${tag()} CDN gagal setelah $maxAttempts percobaan, giving up")
                 sendError(output, 502)
+                return
+            }
+            cdnResponses.add(cdnResp)
+
+            val body = cdnResp.body ?: run {
+                Log.e(TAG, "${tag()} CDN body null")
+                sendError(output, 502)
+                cdnResponses.remove(cdnResp)
+                cdnResp.close()
                 return
             }
 
@@ -555,17 +676,19 @@ class MegaNzExtractor : ExtractorApi() {
                     if (bytesSinceFlush >= FLUSH_EVERY) {
                         output.flush()
                         bytesSinceFlush = 0
+                        lastActivityMs = System.currentTimeMillis()
                     }
                 }
 
                 output.flush()
-                Log.d(TAG, "Stream done - sent ${totalSent / 1024} KB")
+                Log.d(TAG, "${tag()} Stream done - sent ${totalSent / 1024} KB")
 
             } catch (e: java.io.IOException) {
-                Log.d(TAG, "Client disconnected after ${totalSent / 1024} KB: ${e.message}")
+                Log.d(TAG, "${tag()} Client disconnected after ${totalSent / 1024} KB: ${e.message}")
             } finally {
                 body.close()
                 cdnResp.close()
+                cdnResponses.remove(cdnResp)
             }
         }
 
