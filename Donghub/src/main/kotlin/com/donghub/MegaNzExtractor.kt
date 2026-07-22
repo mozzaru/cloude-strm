@@ -49,14 +49,25 @@ class MegaNzExtractor : ExtractorApi() {
                 .build()
         }
 
-        // 16 threads (naik dari 8) untuk beri ruang lebih kalau ada proxy lama
-        // yang belum sempat dibersihkan - kombinasi dengan self-expiry di atas
-        // supaya thread tidak pernah benar-benar habis/leak permanen.
+        /*
+         * Do not put acceptLoop and streaming clients in the same fixed pool.
+         * ExoPlayer normally opens several ranges at once (moov probe, tail
+         * probe and the playback range). A fixed pool whose accept loop uses a
+         * worker can starve and makes the proxy look like a broken MP4 source.
+         *
+         * The proxy is localhost-only and each instance also has a per-proxy
+         * client cap, therefore a cached accept executor plus a bounded worker
+         * pool is safe and, importantly, keeps accepting seeks while data is
+         * being copied from MEGA.
+         */
+        private val acceptExecutor by lazy {
+            Executors.newCachedThreadPool { r ->
+                Thread(r, "mega-accept-${System.nanoTime() % 100}").also { it.isDaemon = true }
+            }
+        }
         private val proxyExecutor by lazy {
-            Executors.newFixedThreadPool(16) { r ->
-                Thread(r, "mega-proxy-${System.nanoTime() % 100}").also {
-                    it.isDaemon = true
-                }
+            Executors.newFixedThreadPool(32) { r ->
+                Thread(r, "mega-stream-${System.nanoTime() % 100}").also { it.isDaemon = true }
             }
         }
 
@@ -405,6 +416,12 @@ class MegaNzExtractor : ExtractorApi() {
         private val clientSockets = java.util.Collections.synchronizedSet(mutableSetOf<java.net.Socket>())
         private val cdnResponses  = java.util.Collections.synchronizedSet(mutableSetOf<okhttp3.Response>())
 
+        // A player legitimately uses concurrent byte ranges. Never implement
+        // "single-flight" by closing an older range: that truncates MP4 atom
+        // reads and is the direct cause of MediaCodec ERROR_CODE_DECODER_INIT_FAILED.
+        // This cap only protects the app from a runaway localhost client.
+        private val maxConcurrentClients = 8
+
         // Kalau tidak ada aktivitas sama sekali selama IDLE_TIMEOUT_MS (mis.
         // extractor lain lupa/gagal memanggil stopAll() saat user pindah
         // server), proxy ini bunuh diri sendiri supaya port & thread-nya
@@ -419,7 +436,7 @@ class MegaNzExtractor : ExtractorApi() {
                 port = p
                 Log.d(TAG, "${tag()} Server socket created on port $p")
                 
-                proxyExecutor.execute {
+                acceptExecutor.execute {
                     acceptLoop()
                 }
             } catch (e: Exception) {
@@ -459,28 +476,30 @@ class MegaNzExtractor : ExtractorApi() {
                     val client = serverSocket!!.accept()
                     lastActivityMs = System.currentTimeMillis()
 
-                    // ExoPlayer buka koneksi baru tiap kali seek/reposisi/retry -
-                    // itu artinya request LAMA sudah tidak relevan. Kalau
-                    // dibiarkan tetap jalan bersamaan, request lama & baru
-                    // berebut bandwidth CDN yang sama (satu file yang sama!),
-                    // saling bikin lambat, ExoPlayer mengira stall lalu buka
-                    // koneksi baru LAGI - makin ramai berebut, spiral macet
-                    // permanen (persis yang terlihat di log: total client
-                    // aktif naik ke 3-5, semua dapat "Broken pipe" setelah
-                    // cuma dapat data 1-2MB, tidak pernah maju). Jadi begitu
-                    // ada client baru, putus paksa semua yang lama - cukup 1
-                    // stream aktif per waktu, sesuai kebutuhan playback progresif.
-                    val staleClients = synchronized(clientSockets) { clientSockets.toList() }
-                    if (staleClients.isNotEmpty()) {
-                        Log.i(TAG, "${tag()} client baru masuk, memutus ${staleClients.size} koneksi lama (single-flight)")
-                        staleClients.forEach { try { it.close() } catch (_: Exception) {} }
+                    // Do not close older clients here. ExoPlayer opens multiple
+                    // independent ranges during MP4 sniffing and seeking; each
+                    // of them must finish or be closed by ExoPlayer itself.
+                    val accepted = synchronized(clientSockets) {
+                        if (clientSockets.size >= maxConcurrentClients) false
+                        else {
+                            clientSockets.add(client)
+                            true
+                        }
                     }
-                    val staleResponses = synchronized(cdnResponses) { cdnResponses.toList() }
-                    staleResponses.forEach { try { it.close() } catch (_: Exception) {} }
+                    if (!accepted) {
+                        Log.w(TAG, "${tag()} terlalu banyak client; menolak koneksi baru")
+                        rejectClient(client)
+                        continue
+                    }
 
-                    clientSockets.add(client)
                     Log.d(TAG, "${tag()} client connect dari ${client.remoteSocketAddress}, total client aktif=${clientSockets.size}")
-                    proxyExecutor.execute { handleClient(client) }
+                    try {
+                        proxyExecutor.execute { handleClient(client) }
+                    } catch (e: Exception) {
+                        clientSockets.remove(client)
+                        Log.w(TAG, "${tag()} tidak bisa menjadwalkan client: ${e.message}")
+                        rejectClient(client)
+                    }
                 } catch (e: java.net.SocketTimeoutException) {
                     // normal wakeup to re-check stopped flag
                     val idleFor = System.currentTimeMillis() - lastActivityMs
@@ -501,6 +520,15 @@ class MegaNzExtractor : ExtractorApi() {
             Log.d(TAG, "${tag()} acceptLoop berhenti (stopped=${stopped.get()})")
         }
         
+        private fun rejectClient(client: java.net.Socket) {
+            try {
+                BufferedOutputStream(client.getOutputStream()).use { sendError(it, 503) }
+            } catch (_: Exception) {
+            } finally {
+                try { client.close() } catch (_: Exception) {}
+            }
+        }
+
         private fun handleClient(client: java.net.Socket) {
             try {
                 lastActivityMs = System.currentTimeMillis()
@@ -519,6 +547,11 @@ class MegaNzExtractor : ExtractorApi() {
                 
                 val rangeHeader = headers["range"]
                 val (rangeStart, rangeEnd) = parseRange(rangeHeader, fileSize)
+                if (fileSize > 0 && (rangeStart >= fileSize || rangeEnd < rangeStart)) {
+                    Log.w(TAG, "${tag()} unsatisfiable range: $rangeHeader")
+                    sendRangeNotSatisfiable(output)
+                    return
+                }
                 val contentLength = if (fileSize > 0 && rangeEnd >= 0)
                     rangeEnd - rangeStart + 1 else -1L
 
@@ -716,8 +749,16 @@ class MegaNzExtractor : ExtractorApi() {
             if (header == null) return Pair(0L, if (size > 0) size - 1 else -1L)
             val m = Regex("""bytes=(\d*)-(\d*)""").find(header)
                 ?: return Pair(0L, if (size > 0) size - 1 else -1L)
-            val s = m.groupValues[1].toLongOrNull() ?: 0L
-            val e = m.groupValues[2].toLongOrNull() ?: (if (size > 0) size - 1 else -1L)
+            // Suffix ranges (bytes=-N) are used by some media probes.
+            val startText = m.groupValues[1]
+            val endText = m.groupValues[2]
+            if (startText.isBlank() && endText.isNotBlank() && size > 0) {
+                val suffix = endText.toLongOrNull() ?: return Pair(size, size - 1)
+                return Pair((size - suffix).coerceAtLeast(0L), size - 1)
+            }
+            val s = startText.toLongOrNull() ?: 0L
+            val requestedEnd = endText.toLongOrNull() ?: (if (size > 0) size - 1 else -1L)
+            val e = if (size > 0) requestedEnd.coerceAtMost(size - 1) else requestedEnd
             return Pair(s, e)
         }
 
@@ -742,6 +783,19 @@ class MegaNzExtractor : ExtractorApi() {
             sb.append("\r\n")
             out.write(sb.toString().toByteArray(Charsets.US_ASCII))
             out.flush()
+        }
+
+        private fun sendRangeNotSatisfiable(out: BufferedOutputStream) {
+            try {
+                out.write(
+                    (
+                        "HTTP/1.1 416 Range Not Satisfiable\r\n" +
+                            "Content-Range: bytes */$fileSize\r\nContent-Length: 0\r\n" +
+                            "Connection: close\r\n\r\n"
+                    ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+            } catch (_: Exception) {}
         }
 
         private fun sendError(out: BufferedOutputStream, code: Int) {

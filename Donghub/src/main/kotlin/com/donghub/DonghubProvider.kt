@@ -13,7 +13,9 @@ class DonghubProvider : BasePlugin() {
         registerExtractorAPI(DtubeExtractor())
         registerExtractorAPI(RpmvidExtractor())
         registerExtractorAPI(MegaNzExtractor())
-        //registerExtractorAPI(CustomGeoDailymotion())
-        //registerExtractorAPI(CustomDailymotion())
+        // Donghub emits geo.dailymotion.com embeds. The stock extractor does not
+        // consistently handle that URL shape, so register both URL variants.
+        registerExtractorAPI(CustomGeoDailymotion())
+        registerExtractorAPI(CustomDailymotion())
     }
 }
