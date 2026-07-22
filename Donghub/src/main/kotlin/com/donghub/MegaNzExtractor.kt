@@ -458,6 +458,26 @@ class MegaNzExtractor : ExtractorApi() {
                 try {
                     val client = serverSocket!!.accept()
                     lastActivityMs = System.currentTimeMillis()
+
+                    // ExoPlayer buka koneksi baru tiap kali seek/reposisi/retry -
+                    // itu artinya request LAMA sudah tidak relevan. Kalau
+                    // dibiarkan tetap jalan bersamaan, request lama & baru
+                    // berebut bandwidth CDN yang sama (satu file yang sama!),
+                    // saling bikin lambat, ExoPlayer mengira stall lalu buka
+                    // koneksi baru LAGI - makin ramai berebut, spiral macet
+                    // permanen (persis yang terlihat di log: total client
+                    // aktif naik ke 3-5, semua dapat "Broken pipe" setelah
+                    // cuma dapat data 1-2MB, tidak pernah maju). Jadi begitu
+                    // ada client baru, putus paksa semua yang lama - cukup 1
+                    // stream aktif per waktu, sesuai kebutuhan playback progresif.
+                    val staleClients = synchronized(clientSockets) { clientSockets.toList() }
+                    if (staleClients.isNotEmpty()) {
+                        Log.i(TAG, "${tag()} client baru masuk, memutus ${staleClients.size} koneksi lama (single-flight)")
+                        staleClients.forEach { try { it.close() } catch (_: Exception) {} }
+                    }
+                    val staleResponses = synchronized(cdnResponses) { cdnResponses.toList() }
+                    staleResponses.forEach { try { it.close() } catch (_: Exception) {} }
+
                     clientSockets.add(client)
                     Log.d(TAG, "${tag()} client connect dari ${client.remoteSocketAddress}, total client aktif=${clientSockets.size}")
                     proxyExecutor.execute { handleClient(client) }
