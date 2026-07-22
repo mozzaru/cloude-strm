@@ -46,7 +46,7 @@ class Donghub : MainAPI() {
     //private val geoDmExtractor  = CustomGeoDailymotion()
     //private val dmExtractor     = CustomDailymotion()
     //private val megaExtractor   = MegaNzExtractor()
-    private val dtubeExtractor  = DtubeExtractor()
+    //private val dtubeExtractor  = DtubeExtractor()
 
     private val episodeUrlRegex = Regex("""-episode-\d+""", RegexOption.IGNORE_CASE)
 
@@ -411,7 +411,7 @@ class Donghub : MainAPI() {
         //
         // Starting a Mega proxy does not fetch video bytes; CDN traffic begins
         // only after ExoPlayer actually selects its localhost URL.
-        megaOptions.forEach { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
+        //megaOptions.forEach { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
 
         // Resolve the normal streaming sources after Mega. They remain parallel
         // with each other, but their callbacks deliberately arrive last so they
