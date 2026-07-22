@@ -376,11 +376,11 @@ class MegaNzExtractor : ExtractorApi() {
         callback.invoke(
             newExtractorLink(
                 source = name,
-                name = "$name",
+                name = "Mega (manual)",
                 url = playUrl,
                 type = ExtractorLinkType.VIDEO
             ) {
-                this.quality = quality
+                this.quality = Qualities.Unknown.value
                 this.referer = ""
             }
         )
