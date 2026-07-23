@@ -18,18 +18,18 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 
 class OkRuSSL : Odnoklassniki() {
-    override var name    = "OkRuSSL"
+    override var name = "OkRuSSL"
     override var mainUrl = "https://ok.ru"
 }
 
 class OkRuHTTP : Odnoklassniki() {
-    override var name    = "OkRuHTTP"
+    override var name = "OkRuHTTP"
     override var mainUrl = "http://ok.ru"
 }
 
 open class Odnoklassniki : ExtractorApi() {
-    override val name            = "Odnoklassniki"
-    override val mainUrl         = "https://odnoklassniki.ru"
+    override val name = "Odnoklassniki"
+    override val mainUrl = "https://odnoklassniki.ru"
     override val requiresReferer = false
 
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
@@ -45,7 +45,7 @@ open class Odnoklassniki : ExtractorApi() {
         )
         val embedUrl = url.replace("/video/","/videoembed/")
         Log.d("Odnoklassniki", "Fetching embed: $embedUrl")
-        val videoReq  = app.get(embedUrl, headers=headers).text.replace("\\&quot;", "\"").replace("\\\\", "\\")
+        val videoReq = app.get(embedUrl, headers=headers).text.replace("\\&quot;", "\"").replace("\\\\", "\\")
             .replace(Regex("\\\\u([0-9A-Fa-f]{4})")) { matchResult ->
                 Integer.parseInt(matchResult.groupValues[1], 16).toChar().toString()
             }
@@ -61,20 +61,20 @@ open class Odnoklassniki : ExtractorApi() {
             val quality   = video.name.uppercase()
                 .replace("MOBILE", "144p")
                 .replace("LOWEST", "240p")
-                .replace("LOW",    "360p")
-                .replace("SD",     "480p")
-                .replace("HD",     "720p")
-                .replace("FULL",   "1080p")
-                .replace("QUAD",   "1440p")
-                .replace("ULTRA",  "4k")
+                .replace("LOW", "360p")
+                .replace("SD", "480p")
+                .replace("HD", "720p")
+                .replace("FULL", "1080p")
+                .replace("QUAD", "1440p")
+                .replace("ULTRA", "4k")
 
             Log.d("Odnoklassniki", "  Quality: ${video.name} -> $quality")
             callback.invoke(
                 newExtractorLink(
-                    source  = this.name,
-                    name    = this.name,
-                    url     = videoUrl,
-                    type    = INFER_TYPE
+                    source = this.name,
+                    name = this.name,
+                    url = videoUrl,
+                    type = INFER_TYPE
                 ) {
                     this.referer = "$mainUrl/"
                     this.quality = getQualityFromName(quality)

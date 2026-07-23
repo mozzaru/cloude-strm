@@ -81,7 +81,7 @@ open class StreamRuby : ExtractorApi() {
         callback.invoke(newExtractorLink(
             source = this.name,
             name = this.name,
-            url  = m3u8,
+            url = m3u8,
             type = ExtractorLinkType.M3U8,
             {
                 quality = Qualities.Unknown.value

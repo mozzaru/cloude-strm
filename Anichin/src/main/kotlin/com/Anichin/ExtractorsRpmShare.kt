@@ -19,8 +19,7 @@ class RpmShare : ExtractorApi() {
         private val AES_KEY = hexToBytes("6b69656d7469656e6d75613931316361")
         private val AES_IV = hexToBytes("313233343536373839306f6975797472")
 
-        private fun hexToBytes(hex: String): ByteArray =
-            ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        private fun hexToBytes(hex: String): ByteArray = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
         private fun decryptResponse(hexStr: String): String? {
             val data = try { hexToBytes(hexStr.trim()) } catch (e: Exception) { return null }

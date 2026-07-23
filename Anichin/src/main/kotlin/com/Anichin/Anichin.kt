@@ -17,38 +17,38 @@ class Anichin : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     private val browserHeaders = mapOf(
-        "User-Agent"               to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
-        "Accept"                   to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language"          to "id-ID,id;q=0.9",
-        "Cache-Control"            to "no-cache",
-        "Pragma"                   to "no-cache",
-        "Sec-Fetch-Dest"           to "document",
-        "Sec-Fetch-Mode"           to "navigate",
-        "Sec-Fetch-Site"           to "none",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9",
+        "Cache-Control" to "no-cache",
+        "Pragma" to "no-cache",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
         "Upgrade-Insecure-Requests" to "1",
     )
 
     override val mainPage = mainPageOf(
-        ""                                       to "Rilisan Terbaru",
-        "popular-today"                          to "Populer Hari Ini",
-        "rekomendasi"                            to "Rekomendasi",
-        "ongoing"                                to "Series Ongoing",
-        "completed"                              to "Series Completed",
-        "drop"                                   to "Series Drop/Hiatus",
+        "" to "Rilisan Terbaru",
+        "popular-today" to "Populer Hari Ini",
+        "rekomendasi" to "Rekomendasi",
+        "ongoing" to "Series Ongoing",
+        "completed" to "Series Completed",
+        "drop" to "Series Drop/Hiatus",
         "anime/?status=&type=Movie&order=update" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when (request.data) {
-            ""              -> getLatestFromHome(page, request.name)
+            "" -> getLatestFromHome(page, request.name)
             "popular-today" -> getPopularTodayFromHome(page, request.name)
-            "rekomendasi"   -> getRekomendasiFromHome(page, request.name)
-            else            -> getKategoriPage(page, request)
+            "rekomendasi" -> getRekomendasiFromHome(page, request.name)
+            else -> getKategoriPage(page, request)
         }
     }
 
     private suspend fun getLatestFromHome(page: Int, name: String): HomePageResponse {
-        val url      = if (page == 1) mainUrl else "$mainUrl/page/$page/"
+        val url = if (page == 1) mainUrl else "$mainUrl/page/$page/"
         val document = app.get(url, headers = browserHeaders).document
         val section = document.select("div.bixbox").firstOrNull {
             it.selectFirst("div.releases.latesthome") != null
@@ -87,22 +87,22 @@ class Anichin : MainAPI() {
     }
 
     private suspend fun getKategoriPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val data     = request.data
+        val data = request.data
         val hasQuery = '?' in data
         val url = when {
-            hasQuery && page == 1  -> "$mainUrl/$data"
-            hasQuery               -> "$mainUrl/$data&page=$page"
-            page == 1              -> "$mainUrl/$data/"
-            else                   -> "$mainUrl/$data/page/$page/"
+            hasQuery && page == 1 -> "$mainUrl/$data"
+            hasQuery -> "$mainUrl/$data&page=$page"
+            page == 1 -> "$mainUrl/$data/"
+            else -> "$mainUrl/$data/page/$page/"
         }
         val document = app.get(url, headers = browserHeaders).document
-        val items    = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
-        val hasNext  = hasNextPage(document)
+        val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        val hasNext = hasNextPage(document)
         return newHomePageResponse(HomePageList(request.name, items, isHorizontalImages = false), hasNext)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url      = "$mainUrl/?s=${query.replace(" ", "+")}"
+        val url = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = app.get(url, headers = browserHeaders).document
         return document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
     }
@@ -115,8 +115,8 @@ class Anichin : MainAPI() {
             ?: aTag.attr("title").ifBlank { aTag.text() }
         val poster = extractPoster(aTag)
         val typeText = selectFirst(".typez")?.text()?.trim() ?: ""
-        val tvType   = if (typeText.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
-        val epxText   = selectFirst("span.epx")?.text()?.trim() ?: ""
+        val tvType = if (typeText.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
+        val epxText = selectFirst("span.epx")?.text()?.trim() ?: ""
         var epxNumber = Regex("\\d+").find(epxText)?.value?.toIntOrNull()
         if (epxNumber == null) {
             val titleText = aTag.attr("title")
@@ -162,16 +162,45 @@ class Anichin : MainAPI() {
      * "{title} - " prefix from whatever's left (handles the "title glued to synopsis"
      * variants). A `<p>`-only block with no title text passes through untouched.
      */
-    private fun extractSinopsis(doc: Document, title: String): String? {
-        val container = doc.selectFirst("div.desc.mindes")
-        if (container != null) {
-            val cleanTitle = title.trim()
-            val titleOnlyPattern = if (cleanTitle.isNotBlank())
-                Regex("""^\[?\Q$cleanTitle\E\]?$""", RegexOption.IGNORE_CASE) else null
-            val leadingTitlePattern = if (cleanTitle.isNotBlank())
-                Regex("""^\[?\Q$cleanTitle\E\]?(?:\s*\[[^\]]*])?\s*(?:-\s*)?""", RegexOption.IGNORE_CASE)
-                else null
+    /**
+     * IMPORTANT — this has now been checked against TWO live pages with genuinely different
+     * internal structure (2026-07-23):
+     *   - /slay-the-gods-season-2/: "Sinopsis {Judul}" heading sits ALONE inside its own
+     *     title-wrapper div (no sibling at all), and the real synopsis lives in a SEPARATE
+     *     `div.entry-content` block further down (title-only heading + paragraph inside it).
+     *   - /renegade-immortal/: "Sinopsis {Judul}" heading is directly followed by ONE paragraph
+     *     in "Judul – sinopsis" (dash-joined) form — no separate title-only heading at all.
+     * There is also a class named `mindesc` (NOT `desc mindes` as previously assumed — that
+     * combined class does not actually exist) that holds a totally different, site-wide
+     * alt-title spam line ("nonton {title} terlengkap, {title} Subtitle Indonesia, {title} sub
+     * indo, download {title} sub indo, streaming {title} di Anichin.") — never the real plot.
+     * And a plain `div.desc` holds the OTHER, longer SEO filler paragraph ("Tonton streaming...
+     * kamu juga bisa download gratis... MP4 MKV hardsub softsub...").
+     *
+     * Because structure genuinely varies per title, extraction now tries, in order:
+     *   1. `div.entry-content` (proven correct on both tested pages) — primary.
+     *   2. Walking forward from the "Sinopsis ..." heading — fallback for the (probably rarer)
+     *      case where no entry-content div exists.
+     *   3. `div.desc.mindes` — kept only in case an older page variant truly uses it.
+     *   4. Any remaining entry-content/desc block that isn't a known filler.
+     * Every step is guarded by a boilerplate/spam pattern so filler text is never returned
+     * even if it happens to be the first match for a given selector on some page.
+     */
+    private val boilerplateSynopsisPattern = Regex(
+        "Tonton streaming.{0,80}di Anichin|kamu juga bisa download gratis|hardsub softsub subtitle" +
+            "|nonton .{0,80} terlengkap|.{0,80} sub indo, download .{0,80} sub indo",
+        RegexOption.IGNORE_CASE
+    )
 
+    private fun extractSinopsis(doc: Document, title: String): String? {
+        val cleanTitle = title.trim()
+        val titleOnlyPattern = if (cleanTitle.isNotBlank())
+            Regex("""^\[?\Q$cleanTitle\E\]?$""", RegexOption.IGNORE_CASE) else null
+        val leadingTitlePattern = if (cleanTitle.isNotBlank())
+            Regex("""^\[?\Q$cleanTitle\E\]?(?:\s*\[[^\]]*])?\s*[-–—]?\s*""", RegexOption.IGNORE_CASE)
+            else null
+
+        fun cleanDescContainer(container: Element): String? {
             val segments = mutableListOf<String>()
             for (node in container.childNodes()) {
                 val text = when {
@@ -184,21 +213,74 @@ class Anichin : MainAPI() {
                 if (titleOnlyPattern?.matches(text) == true) continue
                 segments.add(text)
             }
+            if (segments.isEmpty()) return null
+            leadingTitlePattern?.let { segments[0] = it.replaceFirst(segments[0], "").trim() }
+            return segments.filter { it.isNotBlank() }.joinToString("\n\n").ifBlank { null }
+        }
 
-            if (segments.isNotEmpty()) {
-                leadingTitlePattern?.let { segments[0] = it.replaceFirst(segments[0], "").trim() }
-                val result = segments.filter { it.isNotBlank() }.joinToString("\n\n")
-                if (result.isNotBlank()) return result
+        // 1) PRIMARY: div.entry-content, verified correct on two structurally different pages.
+        doc.select("div.entry-content").firstOrNull { !boilerplateSynopsisPattern.containsMatchIn(it.text()) }
+            ?.let { container ->
+                cleanDescContainer(container)?.let { return it }
+                // fall through to plain text if the child-node walk finds nothing usable
+                val plain = container.text().trim()
+                if (plain.isNotBlank() && !boilerplateSynopsisPattern.containsMatchIn(plain)) return plain
+            }
+
+        // 2) Fallback: walk forward from the "Sinopsis ..." heading (handles pages without an
+        //    entry-content div at all).
+        val sinopsisHeading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
+            it.text().trim().startsWith("Sinopsis", ignoreCase = true)
+        }
+        if (sinopsisHeading != null) {
+            val collected = mutableListOf<String>()
+            var node = sinopsisHeading.nextElementSibling()
+            var steps = 0
+            while (node != null && steps < 8) {
+                steps++
+                val nodeText = node.text().trim()
+                val isHeading = Regex("^[Hh][1-6]$").matches(node.tagName())
+                if (isHeading) {
+                    val isTitleOnly = titleOnlyPattern?.matches(nodeText) == true
+                    if (!isTitleOnly) break // hit the next real section, e.g. cast list
+                } else if (nodeText.isNotBlank()) {
+                    collected.add(nodeText)
+                }
+                node = node.nextElementSibling()
+            }
+            val joined = collected.joinToString("\n\n").trim()
+            if (joined.isNotBlank() && !boilerplateSynopsisPattern.containsMatchIn(joined)) {
+                leadingTitlePattern?.let { return it.replaceFirst(joined, "").trim() }
+                return joined
             }
         }
 
-        val heading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
-            it.text().trim().startsWith("Sinopsis", ignoreCase = true)
+        // 3) Kept in case some page variant genuinely has both classes together.
+        val descContainer = doc.select("div.desc.mindes").firstOrNull { block ->
+            !boilerplateSynopsisPattern.containsMatchIn(block.text())
         }
-        val fromHeading = heading?.nextElementSibling()?.text()?.trim()
-        if (!fromHeading.isNullOrBlank()) return fromHeading
+        if (descContainer != null) {
+            cleanDescContainer(descContainer)?.let { return it }
+        }
 
-        return doc.selectFirst("div.entry-content, div.desc")?.text()?.trim()
+        // 4) Last resort.
+        val fallback = doc.select("div.entry-content, div.desc").firstOrNull {
+            !boilerplateSynopsisPattern.containsMatchIn(it.text())
+        }
+        return fallback?.text()?.trim()
+    }
+
+    /**
+     * Extracts the numeric site rating (e.g. "Rating 9.80" shown near the poster/Bookmark
+     * button) — verified present in that exact "Rating <number>" text form live 2026-07-23.
+     * Uses a text-regex rather than a guessed CSS class, since the raw class name wasn't
+     * visible in the fetched output used to verify this. Run the accompanying Termux
+     * diagnostic script if you want to swap this for a precise selector instead.
+     */
+    private fun extractRatingText(doc: Document): String? {
+        val match = Regex("""Rating\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE)
+            .find(doc.text())
+        return match?.groupValues?.getOrNull(1)
     }
 
     /**
@@ -217,7 +299,7 @@ class Anichin : MainAPI() {
     }
 
     private fun parseEpisodeFromSpan(spanText: String, h3Text: String): Triple<Int?, String?, Long?> {
-        val parts   = spanText.split(" - ")
+        val parts = spanText.split(" - ")
         val epsPart = parts.getOrNull(0)?.trim() ?: ""
         var epNum = Regex("\\d+").find(epsPart)?.value?.toIntOrNull()
         if (epNum == null && h3Text.isNotBlank()) {
@@ -230,7 +312,7 @@ class Anichin : MainAPI() {
         val secondPart = parts.getOrNull(1)?.trim()
         val isDate = secondPart != null && datePattern.containsMatchIn(secondPart)
         val epTheme = if (secondPart != null && !isDate) secondPart.ifBlank { null } else null
-        val epDate  = if (isDate) parseEnglishDate(secondPart) else null
+        val epDate = if (isDate) parseEnglishDate(secondPart) else null
         return Triple(epNum, epTheme, epDate)
     }
 
@@ -255,26 +337,27 @@ class Anichin : MainAPI() {
                 ?: epDoc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
             val description = extractSinopsis(epDoc, title)
-            val genres      = epDoc.select("div.genxed a").map { it.text().trim() }
-            val showStatus  = parseShowStatus(epDoc.select("div.spe span").map { it.text() })
+            val genres = epDoc.select("div.genxed a").map { it.text().trim() }
+            val showStatus = parseShowStatus(epDoc.select("div.spe span").map { it.text() })
+            val ratingText = extractRatingText(epDoc)
 
             val seenIds = mutableSetOf<Int>()
             val episodes = epDoc.select("div.episodelist ul li").mapNotNull { li ->
-                val a      = li.selectFirst("a") ?: return@mapNotNull null
+                val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 val dataId = li.attr("data-id").toIntOrNull() ?: return@mapNotNull null
                 if (!seenIds.add(dataId)) return@mapNotNull null
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
-                val h3Text   = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
+                val h3Text = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
                 val (epNum, epTheme, epDate) = parseEpisodeFromSpan(spanText, h3Text)
                 val epPoster = li.selectFirst("div.thumbnel img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
                 newEpisode(epHref) {
-                    this.name      = epTheme
-                    this.episode   = epNum
+                    this.name = epTheme
+                    this.episode = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
-                    this.date      = epDate
+                    this.date = epDate
                 }
             }.reversed()
 
@@ -282,45 +365,47 @@ class Anichin : MainAPI() {
                 ?.let { fixUrl(it) } ?: seriesUrl
 
             return newTvSeriesLoadResponse(title, cleanSeriesUrl, TvType.Anime, episodes) {
-                this.posterUrl  = poster
-                this.plot       = description
-                this.tags       = genres
+                this.posterUrl = poster
+                this.plot = description
+                this.tags = genres
                 this.showStatus = showStatus
+                this.score = Score.from10(ratingText?.toDoubleOrNull() ?: 0.0)
             }
         }
 
         val document = app.get(seriesUrl, headers = browserHeaders).document
-        val title    = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
         val poster = document.selectFirst("div.thumb img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
 
         val description = extractSinopsis(document, title)
-        val genres      = document.select("div.genxed a").map { it.text().trim() }
-        val showStatus  = parseShowStatus(document.select("div.spe span").map { it.text() })
+        val genres = document.select("div.genxed a").map { it.text().trim() }
+        val showStatus = parseShowStatus(document.select("div.spe span").map { it.text() })
+        val ratingText = extractRatingText(document)
 
         val episodeList = document.select("div.eplister ul li")
-        val isSeries    = episodeList.isNotEmpty()
-        val tvType      = if (isSeries) TvType.Anime else TvType.Movie
+        val isSeries = episodeList.isNotEmpty()
+        val tvType = if (isSeries) TvType.Anime else TvType.Movie
 
         val episodes = if (isSeries) {
             val seenHrefs = mutableSetOf<String>()
             episodeList.mapNotNull { li ->
-                val a      = li.selectFirst("a") ?: return@mapNotNull null
+                val a = li.selectFirst("a") ?: return@mapNotNull null
                 val epHref = fixUrl(a.attr("href"))
                 if (!seenHrefs.add(epHref)) return@mapNotNull null
                 val epNumRaw = li.selectFirst("div.epl-num")?.text()?.trim() ?: ""
-                val epNum    = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
-                val epTitle  = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
-                val epDate   = parseEnglishDate(li.selectFirst("div.epl-date")?.text()?.trim())
+                val epNum = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
+                val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
+                val epDate = parseEnglishDate(li.selectFirst("div.epl-date")?.text()?.trim())
                 val epPoster = li.selectFirst("div.epl-image img")?.run {
                     attr("src").ifBlank { attr("data-src") }
                 }.orEmpty()
                 newEpisode(epHref) {
-                    this.name      = epTitle
-                    this.episode   = epNum
+                    this.name = epTitle
+                    this.episode = epNum
                     this.posterUrl = epPoster.ifBlank { poster }
-                    this.date      = epDate
+                    this.date = epDate
                 }
             }.reversed()
         } else {
@@ -329,23 +414,24 @@ class Anichin : MainAPI() {
             if (!base64.isNullOrBlank()) {
                 try {
                     val decoded = base64Decode(base64)
-                    val rawSrc  = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")
+                    val rawSrc = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")
                     if (!rawSrc.isNullOrBlank()) {
                         playUrl = if (rawSrc.startsWith("http")) rawSrc else "https:$rawSrc"
                     }
                 } catch (_: Exception) {}
             }
             listOf(newEpisode(playUrl ?: seriesUrl) {
-                name      = "Movie"
+                name = "Movie"
                 posterUrl = poster
             })
         }
 
         return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
-            this.posterUrl  = poster
-            this.plot       = description
-            this.tags       = genres
+            this.posterUrl = poster
+            this.plot = description
+            this.tags = genres
             this.showStatus = showStatus
+            this.score = Score.from10(ratingText?.toDoubleOrNull() ?: 0.0)
         }
     }
 
