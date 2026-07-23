@@ -145,46 +145,14 @@ class Anichin : MainAPI() {
     }
 
     /**
-     * Anichin's real synopsis lives in `div.desc.mindes`, but its internal markup is
-     * NOT consistent across pages — confirmed by inspecting several live pages (2026-07):
-     *  - `<h4>Title [Native]</h4>` + a bare text node holding the synopsis
-     *  - just a `<p>` with the synopsis (no title heading at all)
-     *  - a single `<h4>[Title]synopsis</h4>` with title and synopsis run together
-     *  - two `<h4>`s: one holding only `[Title]`, the next holding the real synopsis
-     *  - two `<h5>`s: one holding `"Title - synopsis"` (dash-joined), the next a note
-     * All variants end with an empty `<span class="colap">` (a "read more" toggle).
-     * Some titles (freshly-added ones) have no `div.desc.mindes` or `div.desc` at all —
-     * the site genuinely hasn't published a synopsis yet, not a scraping bug.
+     * Sinopsis extraction strategy (verified against live pages 2026-07):
+     *   1. Series page: `div.bixbox.synp div.entry-content`
+     *   2. Episode page: `div.single-info div.desc.mindes`
+     *   3. Walk forward from a "Sinopsis ..." heading
+     *   4. Generic non-spam `div.entry-content` or `div.desc`
      *
-     * Rather than match a specific tag shape, this walks every direct child, drops any
-     * child whose entire text is just the title (handles the "title-only heading"
-     * variant), then strips a leading "{title}", "[{title}]", "{title} [{native}]", or
-     * "{title} - " prefix from whatever's left (handles the "title glued to synopsis"
-     * variants). A `<p>`-only block with no title text passes through untouched.
-     */
-    /**
-     * IMPORTANT — this has now been checked against TWO live pages with genuinely different
-     * internal structure (2026-07-23):
-     *   - /slay-the-gods-season-2/: "Sinopsis {Judul}" heading sits ALONE inside its own
-     *     title-wrapper div (no sibling at all), and the real synopsis lives in a SEPARATE
-     *     `div.entry-content` block further down (title-only heading + paragraph inside it).
-     *   - /renegade-immortal/: "Sinopsis {Judul}" heading is directly followed by ONE paragraph
-     *     in "Judul – sinopsis" (dash-joined) form — no separate title-only heading at all.
-     * There is also a class named `mindesc` (NOT `desc mindes` as previously assumed — that
-     * combined class does not actually exist) that holds a totally different, site-wide
-     * alt-title spam line ("nonton {title} terlengkap, {title} Subtitle Indonesia, {title} sub
-     * indo, download {title} sub indo, streaming {title} di Anichin.") — never the real plot.
-     * And a plain `div.desc` holds the OTHER, longer SEO filler paragraph ("Tonton streaming...
-     * kamu juga bisa download gratis... MP4 MKV hardsub softsub...").
-     *
-     * Because structure genuinely varies per title, extraction now tries, in order:
-     *   1. `div.entry-content` (proven correct on both tested pages) — primary.
-     *   2. Walking forward from the "Sinopsis ..." heading — fallback for the (probably rarer)
-     *      case where no entry-content div exists.
-     *   3. `div.desc.mindes` — kept only in case an older page variant truly uses it.
-     *   4. Any remaining entry-content/desc block that isn't a known filler.
-     * Every step is guarded by a boilerplate/spam pattern so filler text is never returned
-     * even if it happens to be the first match for a given selector on some page.
+     * Each step is guarded by a boilerplate filter so SEO filler
+     * ("Tonton streaming...", "nonton ... terlengkap") is never returned.
      */
     private val boilerplateSynopsisPattern = Regex(
         "Tonton streaming.{0,80}di Anichin|kamu juga bisa download gratis|hardsub softsub subtitle" +
@@ -218,17 +186,25 @@ class Anichin : MainAPI() {
             return segments.filter { it.isNotBlank() }.joinToString("\n\n").ifBlank { null }
         }
 
-        // 1) PRIMARY: div.entry-content, verified correct on two structurally different pages.
-        doc.select("div.entry-content").firstOrNull { !boilerplateSynopsisPattern.containsMatchIn(it.text()) }
+        fun isSpam(text: String?) = text != null && boilerplateSynopsisPattern.containsMatchIn(text)
+
+        // 1) Series page: div.bixbox.synp div.entry-content (most specific, never spam).
+        doc.select("div.bixbox.synp div.entry-content").firstOrNull { !isSpam(it.text()) }
             ?.let { container ->
                 cleanDescContainer(container)?.let { return it }
-                // fall through to plain text if the child-node walk finds nothing usable
                 val plain = container.text().trim()
-                if (plain.isNotBlank() && !boilerplateSynopsisPattern.containsMatchIn(plain)) return plain
+                if (plain.isNotBlank() && !isSpam(plain)) return plain
             }
 
-        // 2) Fallback: walk forward from the "Sinopsis ..." heading (handles pages without an
-        //    entry-content div at all).
+        // 2) Episode sidebar: div.single-info div.desc.mindes (holds real synopsis on episode pages).
+        doc.select("div.single-info div.desc.mindes").firstOrNull { !isSpam(it.text()) }
+            ?.let { container ->
+                cleanDescContainer(container)?.let { return it }
+                val plain = container.text().trim()
+                if (plain.isNotBlank() && !isSpam(plain)) return plain
+            }
+
+        // 3) Walk forward from the "Sinopsis ..." heading (handles pages without standard containers).
         val sinopsisHeading = doc.select("h1, h2, h3, h4, h5").firstOrNull {
             it.text().trim().startsWith("Sinopsis", ignoreCase = true)
         }
@@ -242,32 +218,28 @@ class Anichin : MainAPI() {
                 val isHeading = Regex("^[Hh][1-6]$").matches(node.tagName())
                 if (isHeading) {
                     val isTitleOnly = titleOnlyPattern?.matches(nodeText) == true
-                    if (!isTitleOnly) break // hit the next real section, e.g. cast list
+                    if (!isTitleOnly) break
                 } else if (nodeText.isNotBlank()) {
                     collected.add(nodeText)
                 }
                 node = node.nextElementSibling()
             }
             val joined = collected.joinToString("\n\n").trim()
-            if (joined.isNotBlank() && !boilerplateSynopsisPattern.containsMatchIn(joined)) {
+            if (joined.isNotBlank() && !isSpam(joined)) {
                 leadingTitlePattern?.let { return it.replaceFirst(joined, "").trim() }
                 return joined
             }
         }
 
-        // 3) Kept in case some page variant genuinely has both classes together.
-        val descContainer = doc.select("div.desc.mindes").firstOrNull { block ->
-            !boilerplateSynopsisPattern.containsMatchIn(block.text())
-        }
-        if (descContainer != null) {
-            cleanDescContainer(descContainer)?.let { return it }
+        // 4) Generic fallback — only non-spam div.entry-content or div.desc.
+        val fallback = doc.select("div.entry-content, div.desc").firstOrNull { !isSpam(it.text()) }
+        if (fallback != null) {
+            cleanDescContainer(fallback)?.let { return it }
+            val plain = fallback.text().trim()
+            if (plain.isNotBlank() && !isSpam(plain)) return plain
         }
 
-        // 4) Last resort.
-        val fallback = doc.select("div.entry-content, div.desc").firstOrNull {
-            !boilerplateSynopsisPattern.containsMatchIn(it.text())
-        }
-        return fallback?.text()?.trim()
+        return null
     }
 
     /**
