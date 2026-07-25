@@ -165,12 +165,16 @@ class Donghub : MainAPI() {
             if (posterUrlRaw.startsWith("//")) "https:$posterUrlRaw" else posterUrlRaw
         )
 
+        val isEggLayout = selectFirst("div.egghead") != null
+
+        val eggTypeClass = selectFirst("div.eggtype")
+            ?.classNames()?.firstOrNull { it != "eggtype" }
+            ?.lowercase().orEmpty()
         val typeLabel = selectFirst(".typez")?.text()?.lowercase().orEmpty()
         val type = if (href.contains("/movie/", ignoreCase = true) ||
-            typeLabel.contains("movie")
+            typeLabel.contains("movie") ||
+            eggTypeClass == "movie"
         ) TvType.Movie else TvType.Anime
-
-        val isEggLayout = selectFirst("div.egghead") != null
 
         val epNum: Int?
         val isCompleted: Boolean
