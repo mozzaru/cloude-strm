@@ -60,15 +60,21 @@ open class DailymotionFixed : ExtractorApi() {
         referer: String,
         callback: (ExtractorLink) -> Unit,
     ) {
-        val masterUrl = tryMetadataApi(videoId, referer)
-            ?: tryGeoEmbed(videoId, referer)
+        val candidates = mutableListOf<String>()
+        tryMetadataApi(videoId, referer)?.let { candidates.add(it) }
+        tryGeoEmbed(videoId, referer)?.let { candidates.add(it) }
 
-        if (masterUrl != null) {
-            Log.i(TAG, "Master URL resolved")
-            parseMasterAndEmit(masterUrl, referer, callback)
-        } else {
+        if (candidates.isEmpty()) {
             Log.w(TAG, "All methods failed for video: $videoId")
+            return
         }
+
+        for (masterUrl in candidates) {
+            if (tryParseAndEmit(masterUrl, referer, callback)) return
+        }
+
+        Log.w(TAG, "All CDN URLs failed, emitting last one anyway")
+        emitLink(candidates.last(), referer, Qualities.Unknown.value, callback)
     }
 
     private suspend fun tryMetadataApi(videoId: String, referer: String): String? {
@@ -92,9 +98,10 @@ open class DailymotionFixed : ExtractorApi() {
             "https://geo.dailymotion.com/player.html?autoplay=0&mute=0&loop=0&controls=1&showinfo=1&video=$videoId",
             "https://geo.dailymotion.com/player/x1kcvu.html?video=$videoId",
         )
+        val ref = "https://www.dailymotion.com/"
         for (geoUrl in urls) {
             try {
-                val resp = app.get(geoUrl, headers = headers(referer))
+                val resp = app.get(geoUrl, headers = headers(ref))
                 val html = resp.text
 
                 val manifestUrl = Regex(""""manifestUrl"\s*:\s*"([^"]+)""").find(html)
@@ -116,19 +123,18 @@ open class DailymotionFixed : ExtractorApi() {
         return null
     }
 
-    private suspend fun parseMasterAndEmit(
+    private suspend fun tryParseAndEmit(
         masterUrl: String,
         referer: String,
         callback: (ExtractorLink) -> Unit,
-    ) {
-        try {
+    ): Boolean {
+        return try {
             val resp = app.get(masterUrl, headers = headers(referer))
             val body = resp.text
 
             if (!body.startsWith("#EXTM3U")) {
-                Log.w(TAG, "Not a valid m3u8")
-                emitLink(masterUrl, referer, Qualities.Unknown.value, callback)
-                return
+                Log.w(TAG, "CDN returned invalid m3u8")
+                return false
             }
 
             val variantRegex = Regex("""#EXT-X-STREAM-INF(.*?)\n""", RegexOption.DOT_MATCHES_ALL)
@@ -138,9 +144,10 @@ open class DailymotionFixed : ExtractorApi() {
                 .maxOrNull() ?: Qualities.Unknown.value
 
             emitLink(masterUrl, referer, bestQuality, callback)
+            true
         } catch (e: Exception) {
-            Log.w(TAG, "Master parse failed: ${e.message}")
-            emitLink(masterUrl, referer, Qualities.Unknown.value, callback)
+            Log.w(TAG, "CDN failed: ${e.message}")
+            false
         }
     }
 
