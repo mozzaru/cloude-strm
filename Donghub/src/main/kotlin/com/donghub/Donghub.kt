@@ -99,9 +99,9 @@ class Donghub : MainAPI() {
                 box.selectFirst("div.releases.latesthome") != null
             }
             latestSection?.select("article.bs")?.mapNotNull { it.toSearchResult() }
-                ?: document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+                ?: document.select("div.listupd article").mapNotNull { it.toSearchResult() }
         } else {
-            document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+            document.select("div.listupd article").mapNotNull { it.toSearchResult() }
         }.distinctBy { it.url }
 
         val hasNext = document.selectFirst("div.hpage a.r") != null
@@ -153,7 +153,8 @@ class Donghub : MainAPI() {
         val rawTitle = aTag.attr("title").ifBlank {
             selectFirst("div.tt")?.ownText().orEmpty()
         }.ifBlank { aTag.text() }.trim()
-        val href = fixUrl(aTag.attr("href"))
+        val rawHref = fixUrl(aTag.attr("href"))
+        val href = episodeUrlToSeriesUrl(rawHref) ?: rawHref
         val img = aTag.selectFirst("img")
 
         val posterUrlRaw = img?.run {
@@ -225,20 +226,8 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val firstDoc = app.get(url, headers = baseHeaders).document
-
-        val allEpsLink = firstDoc.selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
-
-        val seriesUrl: String
-        val document: org.jsoup.nodes.Document
-
-        if (allEpsLink != null) {
-            seriesUrl = fixUrl(allEpsLink)
-            document  = app.get(seriesUrl, headers = baseHeaders).document
-        } else {
-            seriesUrl = url
-            document  = firstDoc
-        }
+        val document = app.get(url, headers = baseHeaders).document
+        val seriesUrl = url
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
@@ -301,20 +290,7 @@ class Donghub : MainAPI() {
                 }
             }.reversed()
         } else {
-            val firstOption = document.selectFirst(".mobius option")
-            val base64      = firstOption?.attr("value")?.trim()
-            var playUrl: String? = null
-            if (!base64.isNullOrBlank()) {
-                try {
-                    val decoded = base64Decode(base64)
-                    val iframe  = Jsoup.parse(decoded).selectFirst("iframe")
-                    val rawSrc  = iframe?.attr("src")
-                    if (!rawSrc.isNullOrBlank()) {
-                        playUrl = if (rawSrc.startsWith("http")) rawSrc else "https:$rawSrc"
-                    }
-                } catch (_: Exception) {}
-            }
-            if (playUrl == null) playUrl = seriesUrl
+            val playUrl = extractDirectIframe(document) ?: seriesUrl
             listOf(newEpisode(playUrl) { name = "Movie"; posterUrl = poster })
         }
 
@@ -336,6 +312,42 @@ class Donghub : MainAPI() {
         }
     }
 
+    private fun extractDirectIframe(doc: org.jsoup.nodes.Document): String? {
+        val src = doc.selectFirst(".player-embed iframe")?.attr("src").orEmpty()
+            .ifBlank { doc.selectFirst("iframe")?.attr("src").orEmpty() }
+        if (src.isNotBlank()) {
+            return if (src.startsWith("http")) src else "https:$src"
+        }
+        val firstOption = doc.selectFirst(".mobius option")
+        val base64 = firstOption?.attr("value")?.trim()
+        if (!base64.isNullOrBlank()) {
+            try {
+                val decoded = base64Decode(base64)
+                val iframeSrc = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")
+                if (!iframeSrc.isNullOrBlank()) {
+                    return if (iframeSrc.startsWith("http")) iframeSrc else "https:$iframeSrc"
+                }
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
+    private suspend fun resolveVideo(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        when {
+            url.contains("geo.dailymotion.com") ->
+                GeodailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
+            url.contains("dailymotion.com") ->
+                DailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
+            else ->
+                loadExtractor(url, referer, subtitleCallback, callback)
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -345,69 +357,41 @@ class Donghub : MainAPI() {
         Log.i(TAG, "=== loadLinks called === URL: $data")
 
         val document = app.get(data, headers = baseHeaders).document
-        val options = document.select(".mobius option")
 
-        Log.i(TAG, "Server options found: ${options.size}")
-
-        val otherOptions = mutableListOf<Pair<String, String>>()
-
-        options.forEach { server ->
-            val serverLabel = server.text().trim()
-            val base64 = server.attr("value").trim()
-            if (base64.isBlank()) {
-                Log.w(TAG, "[$serverLabel] Skipped — base64 blank")
-                return@forEach
-            }
-            val decoded = base64Decode(base64)
-            if (decoded.isBlank()) {
-                Log.w(TAG, "[$serverLabel] Skipped — decode result blank")
-                return@forEach
-            }
-            otherOptions.add(serverLabel to decoded)
+        // Theme baru: direct iframe di .player-embed
+        val directSrc = extractDirectIframe(document)
+        if (directSrc != null) {
+            Log.i(TAG, "Direct iframe found: $directSrc")
+            resolveVideo(directSrc, data, subtitleCallback, callback)
+            Log.i(TAG, "=== loadLinks done ===")
+            return true
         }
 
-        suspend fun resolveOne(serverLabel: String, decoded: String) {
-            val doc = Jsoup.parse(decoded)
+        // Fallback: mobius base64
+        val options = document.select(".mobius option")
+        Log.i(TAG, "Mobius options: ${options.size}")
 
-            val src = doc.selectFirst("iframe")
-                ?.attr("src").orEmpty()
-                .ifBlank {
-                    Log.d(TAG, "[$serverLabel] No iframe, fallback to video source")
-                    doc.selectFirst("video source")?.attr("src").orEmpty()
-                }
+        val otherOptions = mutableListOf<Pair<String, String>>()
+        options.forEach { server ->
+            val label = server.text().trim()
+            val b64 = server.attr("value").trim()
+            if (b64.isBlank()) return@forEach
+            val decoded = base64Decode(b64)
+            if (decoded.isNotBlank()) otherOptions.add(label to decoded)
+        }
 
-            if (src.isBlank()) {
-                Log.w(TAG, "[$serverLabel] Skipped — no src found")
-                return
-            }
-
+        otherOptions.amap { (label, decoded) ->
+            val src = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src").orEmpty()
+                .ifBlank { Jsoup.parse(decoded).selectFirst("video source")?.attr("src").orEmpty() }
+            if (src.isBlank()) return@amap
             val finalUrl = when {
                 src.startsWith("http") -> src
                 src.startsWith("//")   -> "https:$src"
-                else -> {
-                    Log.w(TAG, "[$serverLabel] Skipped — invalid URL format: $src")
-                    return
-                }
+                else -> return@amap
             }
-
-            Log.i(TAG, "[$serverLabel] → $finalUrl")
-
-            // Panggil DailymotionFixed LANGSUNG kalau URL-nya dailymotion,
-            // supaya gak ambigu sama Dailymotion/Geodailymotion bawaan core
-            // library yang sudah otomatis terdaftar di APK. loadExtractor()
-            // generik tidak menjamin custom extractor kamu yang dipanggil
-            // duluan kalau ada dua extractor dengan mainUrl yang overlap.
-            when {
-                finalUrl.contains("geo.dailymotion.com") -> 
-                    GeodailymotionFixed().getUrl(finalUrl, data, subtitleCallback, callback)
-                finalUrl.contains("dailymotion.com") -> 
-                    DailymotionFixed().getUrl(finalUrl, data, subtitleCallback, callback)
-                else -> 
-                    loadExtractor(finalUrl, data, subtitleCallback, callback)
-            }
+            Log.i(TAG, "[$label] → $finalUrl")
+            resolveVideo(finalUrl, data, subtitleCallback, callback)
         }
-
-        otherOptions.amap { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
 
         Log.i(TAG, "=== loadLinks done ===")
         return true

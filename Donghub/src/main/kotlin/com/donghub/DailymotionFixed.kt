@@ -19,14 +19,7 @@ class GeodailymotionFixed : DailymotionFixed() {
 open class DailymotionFixed : ExtractorApi() {
     override val name = "DailymotionFixed"
     override val mainUrl = "https://www.dailymotion.com"
-    override val requiresReferer = false
-
-    private val dmHeaders = mapOf(
-        "User-Agent" to USER_AGENT,
-        "Referer" to "https://www.dailymotion.com/",
-        "Origin" to "https://www.dailymotion.com",
-        "Accept" to "application/json, text/plain, */*",
-    )
+    override val requiresReferer = true
 
     override suspend fun getUrl(
         url: String,
@@ -38,16 +31,11 @@ open class DailymotionFixed : ExtractorApi() {
             Log.w(TAG, "No video ID found in: $url")
             return
         }
-        Log.i(TAG, "Video ID: $videoId from: $url")
+        Log.i(TAG, "Video ID: $videoId referer: ${referer?.take(60)}")
 
-        val masterUrl = resolveMasterUrl(videoId)
-        if (masterUrl != null) {
-            Log.i(TAG, "Master URL: $masterUrl")
-            parseMasterAndEmit(masterUrl, callback)
-            return
-        }
+        val pageReferer = referer?.ifBlank { null } ?: url
 
-        Log.w(TAG, "All methods failed for video: $videoId")
+        getBestMasterUrl(videoId, pageReferer, callback)
     }
 
     private fun extractVideoId(url: String): String? {
@@ -59,46 +47,68 @@ open class DailymotionFixed : ExtractorApi() {
                 .takeIf { it.matches(Regex("^[kx][a-zA-Z0-9]+$")) }
     }
 
-    private suspend fun resolveMasterUrl(videoId: String): String? {
-        // Method 1: Geo embed -> manifestUrl (bypasses 2004)
-        val fromGeo = tryGeoEmbed(videoId)
-        if (fromGeo != null) {
-            Log.i(TAG, "Resolved via geo embed")
-            return fromGeo
-        }
+    private fun headers(referer: String) = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Referer" to referer,
+        "Origin" to "https://www.dailymotion.com",
+        "Accept" to "application/json, text/plain, */*",
+        "Priority" to "u=1, i",
+    )
 
-        // Method 2: Metadata API -> find m3u8
-        val fromMeta = tryMetadataApi(videoId)
-        if (fromMeta != null) {
-            Log.i(TAG, "Resolved via metadata API")
-            return fromMeta
-        }
+    private suspend fun getBestMasterUrl(
+        videoId: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val masterUrl = tryMetadataApi(videoId, referer)
+            ?: tryGeoEmbed(videoId, referer)
 
-        return null
+        if (masterUrl != null) {
+            Log.i(TAG, "Master URL resolved")
+            parseMasterAndEmit(masterUrl, referer, callback)
+        } else {
+            Log.w(TAG, "All methods failed for video: $videoId")
+        }
     }
 
-    private suspend fun tryGeoEmbed(videoId: String): String? {
+    private suspend fun tryMetadataApi(videoId: String, referer: String): String? {
+        return try {
+            val resp = app.get(
+                "https://www.dailymotion.com/player/metadata/video/$videoId",
+                headers = headers(referer)
+            )
+            val meta = parseJson<MetadataResponse>(resp.text)
+            val url = meta.qualities?.auto?.firstOrNull { it.url?.contains(".m3u8") == true }?.url
+            if (url != null) Log.i(TAG, "Meta API OK") else Log.w(TAG, "Meta API: no auto URL")
+            url
+        } catch (e: Exception) {
+            Log.w(TAG, "Meta API failed: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun tryGeoEmbed(videoId: String, referer: String): String? {
         val urls = listOf(
             "https://geo.dailymotion.com/player.html?autoplay=0&mute=0&loop=0&controls=1&showinfo=1&video=$videoId",
             "https://geo.dailymotion.com/player/x1kcvu.html?video=$videoId",
         )
         for (geoUrl in urls) {
             try {
-                val resp = app.get(geoUrl, headers = dmHeaders)
+                val resp = app.get(geoUrl, headers = headers(referer))
                 val html = resp.text
 
                 val manifestUrl = Regex(""""manifestUrl"\s*:\s*"([^"]+)""").find(html)
                     ?.groupValues?.get(1)
                     ?.replace("\\/", "/")
                     ?.replace("\\u0026", "&")
-
                 if (!manifestUrl.isNullOrBlank()) {
+                    Log.i(TAG, "Geo embed OK")
                     return manifestUrl
                 }
 
-                val directM3u8 = Regex("""https?://[^"'\s,]+?\.m3u8[^"'\s,]*""").find(html)
-                    ?.value
+                val directM3u8 = Regex("""https?://[^"'\s,]+?\.m3u8[^"'\s,]*""").find(html)?.value
                 if (directM3u8 != null) {
+                    Log.i(TAG, "Geo embed direct m3u8 OK")
                     return directM3u8
                 }
             } catch (_: Exception) {}
@@ -106,59 +116,31 @@ open class DailymotionFixed : ExtractorApi() {
         return null
     }
 
-    private suspend fun tryMetadataApi(videoId: String): String? {
-        return try {
-            val resp = app.get(
-                "https://www.dailymotion.com/player/metadata/video/$videoId",
-                headers = dmHeaders
-            )
-            val meta = parseJson<MetadataResponse>(resp.text)
-            meta.qualities?.auto?.firstOrNull { it.url?.contains(".m3u8") == true }?.url
-        } catch (e: Exception) {
-            Log.w(TAG, "Metadata API failed: ${e.message}")
-            null
-        }
-    }
-
-    @kotlinx.serialization.Serializable
-    data class MetadataResponse(
-        val qualities: QualitiesMap? = null
-    )
-
-    @kotlinx.serialization.Serializable
-    data class QualitiesMap(
-        val auto: List<Stream>? = null
-    )
-
-    @kotlinx.serialization.Serializable
-    data class Stream(
-        val type: String? = null,
-        val url: String? = null
-    )
-
-    private suspend fun parseMasterAndEmit(masterUrl: String, callback: (ExtractorLink) -> Unit) {
+    private suspend fun parseMasterAndEmit(
+        masterUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit,
+    ) {
         try {
-            val resp = app.get(masterUrl, headers = dmHeaders)
+            val resp = app.get(masterUrl, headers = headers(referer))
             val body = resp.text
 
             if (!body.startsWith("#EXTM3U")) {
-                emitLink(masterUrl, Qualities.Unknown.value, callback)
+                Log.w(TAG, "Not a valid m3u8")
+                emitLink(masterUrl, referer, Qualities.Unknown.value, callback)
                 return
             }
 
-            // Parse best quality from master, then emit the master URL itself
-            // (individual variant sub-playlists are video-only; audio is separate
-            // in #EXT-X-MEDIA:TYPE=AUDIO, so player needs the full master)
             val variantRegex = Regex("""#EXT-X-STREAM-INF(.*?)\n""", RegexOption.DOT_MATCHES_ALL)
             val bestQuality = variantRegex.findAll(body)
                 .map { parseQuality(it.groupValues[1]) }
                 .filter { it != Qualities.Unknown.value }
                 .maxOrNull() ?: Qualities.Unknown.value
 
-            emitLink(masterUrl, bestQuality, callback)
+            emitLink(masterUrl, referer, bestQuality, callback)
         } catch (e: Exception) {
             Log.w(TAG, "Master parse failed: ${e.message}")
-            emitLink(masterUrl, Qualities.Unknown.value, callback)
+            emitLink(masterUrl, referer, Qualities.Unknown.value, callback)
         }
     }
 
@@ -195,7 +177,12 @@ open class DailymotionFixed : ExtractorApi() {
         }
     }
 
-    private suspend fun emitLink(url: String, quality: Int, callback: (ExtractorLink) -> Unit) {
+    private suspend fun emitLink(
+        url: String,
+        referer: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit,
+    ) {
         callback.invoke(newExtractorLink(
             source = name,
             name = name,
@@ -203,10 +190,26 @@ open class DailymotionFixed : ExtractorApi() {
             type = ExtractorLinkType.M3U8,
         ) {
             this.quality = quality
-            this.referer = "https://www.dailymotion.com/"
-            this.headers = dmHeaders
+            this.referer = referer
+            this.headers = headers(referer)
         })
     }
+
+    @kotlinx.serialization.Serializable
+    data class MetadataResponse(
+        val qualities: QualitiesMap? = null
+    )
+
+    @kotlinx.serialization.Serializable
+    data class QualitiesMap(
+        val auto: List<Stream>? = null
+    )
+
+    @kotlinx.serialization.Serializable
+    data class Stream(
+        val type: String? = null,
+        val url: String? = null
+    )
 
     companion object {
         private const val TAG = "DailymotionFixed"
