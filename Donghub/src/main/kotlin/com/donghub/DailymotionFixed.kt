@@ -31,11 +31,9 @@ open class DailymotionFixed : ExtractorApi() {
             Log.w(TAG, "No video ID found in: $url")
             return
         }
-        Log.i(TAG, "Video ID: $videoId referer: ${referer?.take(60)}")
+        Log.i(TAG, "videoId=$videoId")
 
         val pageReferer = referer?.ifBlank { null } ?: url
-        Log.i(TAG, "Using pageReferer: ${pageReferer.take(80)}")
-
         getBestMasterUrl(videoId, pageReferer, callback)
     }
 
@@ -47,6 +45,8 @@ open class DailymotionFixed : ExtractorApi() {
             ?: url.substringAfterLast("/").substringBefore("?").substringBefore(".")
                 .takeIf { it.matches(Regex("^[kx][a-zA-Z0-9]+$")) }
     }
+
+    private val cdnReferer = "https://www.dailymotion.com/"
 
     private fun headers(referer: String, isCDN: Boolean = false) = if (isCDN) mapOf(
         "User-Agent" to USER_AGENT,
@@ -73,43 +73,25 @@ open class DailymotionFixed : ExtractorApi() {
             return
         }
 
-        // Use Dailymotion referer for CDN requests — CDN checks this header
-        val cdnReferer = "https://www.dailymotion.com/"
-
         for (masterUrl in candidates) {
-            if (tryParseAndEmit(masterUrl, cdnReferer, callback)) return
+            if (tryParseAndEmit(masterUrl, callback)) return
         }
 
         Log.w(TAG, "All CDN URLs failed, emitting last one anyway")
-        emitLink(candidates.last(), cdnReferer, Qualities.Unknown.value, callback)
+        emitLink(candidates.last(), Qualities.Unknown.value, callback)
     }
 
     private suspend fun tryMetadataApi(videoId: String, referer: String): String? {
         return try {
-            val url = "https://www.dailymotion.com/player/metadata/video/$videoId"
-            Log.i(TAG, "Meta API request: $url")
-            val resp = app.get(url, headers = headers(referer))
-            val body = resp.text
-            Log.i(TAG, "Meta API status: ${resp.code}, body(400): ${body.take(400)}")
-            if (resp.code != 200) {
-                Log.w(TAG, "Meta API non-200 status")
-                return null
-            }
-            val meta = parseJson<MetadataResponse>(body)
-            val autoList = meta.qualities?.auto
-            Log.i(TAG, "Meta API: auto streams = ${autoList?.size}, types=${autoList?.map { it.type }}, urls=${autoList?.map { it.url?.take(80) }}")
-            val urlM3u8 = autoList?.firstOrNull { it.url?.contains(".m3u8") == true }?.url
-            if (urlM3u8 != null) {
-                Log.i(TAG, "Meta API OK: $urlM3u8")
-                return urlM3u8
-            }
-            val anyUrl = autoList?.firstOrNull { it.url != null }?.url
-            if (anyUrl != null) {
-                Log.w(TAG, "Meta API: no m3u8 URL, trying first non-null: $anyUrl")
-                return anyUrl
-            }
-            Log.w(TAG, "Meta API: no auto URL at all")
-            null
+            val resp = app.get(
+                "https://www.dailymotion.com/player/metadata/video/$videoId",
+                headers = headers(referer)
+            )
+            if (resp.code != 200) return null
+            val meta = parseJson<MetadataResponse>(resp.text)
+            val url = meta.qualities?.auto?.firstOrNull { it.url?.contains(".m3u8") == true }?.url
+            if (url != null) Log.i(TAG, "Meta API OK") else Log.w(TAG, "Meta API: no m3u8 URL")
+            url
         } catch (e: Exception) {
             Log.w(TAG, "Meta API failed: ${e.message}")
             null
@@ -121,64 +103,49 @@ open class DailymotionFixed : ExtractorApi() {
             "https://geo.dailymotion.com/player.html?autoplay=0&mute=0&loop=0&controls=1&showinfo=1&video=$videoId",
             "https://geo.dailymotion.com/player/x1kcvu.html?video=$videoId",
         )
-        val ref = "https://www.dailymotion.com/"
         for (geoUrl in urls) {
             try {
-                Log.i(TAG, "Geo embed request: $geoUrl")
-                val resp = app.get(geoUrl, headers = headers(ref))
+                val resp = app.get(geoUrl, headers = headers(cdnReferer))
+                if (resp.code != 200) continue
                 val html = resp.text
-                Log.i(TAG, "Geo embed status: ${resp.code}, HTML(500): ${html.take(500)}")
-                if (resp.code != 200) {
-                    Log.w(TAG, "Geo embed non-200 status")
-                    continue
-                }
 
                 val manifestUrl = Regex(""""manifestUrl"\s*:\s*"([^"]+)""").find(html)
                     ?.groupValues?.get(1)
                     ?.replace("\\/", "/")
                     ?.replace("\\u0026", "&")
                 if (!manifestUrl.isNullOrBlank()) {
-                    Log.i(TAG, "Geo embed manifestUrl OK: ${manifestUrl.take(120)}")
+                    Log.i(TAG, "Geo embed OK")
                     return manifestUrl
                 }
 
                 val directM3u8 = Regex("""https?://[^"'\s,]+?\.m3u8[^"'\s,]*""").find(html)?.value
                 if (directM3u8 != null) {
-                    Log.i(TAG, "Geo embed direct m3u8 OK: ${directM3u8.take(120)}")
+                    Log.i(TAG, "Geo embed direct m3u8 OK")
                     return directM3u8
                 }
-                Log.w(TAG, "Geo embed: no manifestUrl or direct m3u8 found")
-            } catch (e: Exception) {
-                Log.w(TAG, "Geo embed failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return null
     }
 
     private suspend fun tryParseAndEmit(
         masterUrl: String,
-        referer: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         return try {
-            Log.i(TAG, "CDN request: $masterUrl")
-            Log.i(TAG, "CDN headers: User-Agent=${USER_AGENT.take(30)}..., Referer=$referer")
-            val resp = app.get(masterUrl, headers = headers(referer, isCDN = true))
+            val resp = app.get(masterUrl, headers = headers(cdnReferer, isCDN = true))
             val body = resp.text
-            Log.i(TAG, "CDN response: status=${resp.code}, content-type=${resp.headers?.get("Content-Type")}, length=${body.length}")
 
             if (!body.startsWith("#EXTM3U")) {
-                Log.w(TAG, "CDN returned invalid m3u8, prefix(300): ${body.take(300)}")
+                Log.w(TAG, "CDN returned non-m3u8 (status=${resp.code})")
                 return false
             }
 
-            val variantRegex = Regex("""#EXT-X-STREAM-INF(.*?)\n""", RegexOption.DOT_MATCHES_ALL)
-            val bestQuality = variantRegex.findAll(body)
-                .map { parseQuality(it.groupValues[1]) }
-                .filter { it != Qualities.Unknown.value }
-                .maxOrNull() ?: Qualities.Unknown.value
+            val bestQuality = Regex("""#EXT-X-STREAM-INF(.*?)\n""", RegexOption.DOT_MATCHES_ALL)
+                .findAll(body).map { parseQuality(it.groupValues[1]) }
+                .filter { it != Qualities.Unknown.value }.maxOrNull() ?: Qualities.Unknown.value
 
-            emitLink(masterUrl, referer, bestQuality, callback)
+            emitLink(masterUrl, bestQuality, callback)
             true
         } catch (e: Exception) {
             Log.w(TAG, "CDN failed: ${e.message}")
@@ -221,7 +188,6 @@ open class DailymotionFixed : ExtractorApi() {
 
     private suspend fun emitLink(
         url: String,
-        referer: String,
         quality: Int,
         callback: (ExtractorLink) -> Unit,
     ) {
@@ -232,8 +198,8 @@ open class DailymotionFixed : ExtractorApi() {
             type = ExtractorLinkType.M3U8,
         ) {
             this.quality = quality
-            this.referer = referer
-            this.headers = headers(referer)
+            this.referer = cdnReferer
+            this.headers = headers(cdnReferer, isCDN = true)
         })
     }
 
