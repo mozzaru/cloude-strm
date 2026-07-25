@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
 class GeodailymotionFixed : DailymotionFixed() {
     override val name = "GeoDailymotion"
@@ -111,14 +112,29 @@ open class DailymotionFixed : ExtractorApi() {
                 "https://www.dailymotion.com/player/metadata/video/$videoId",
                 headers = dmHeaders
             )
-            val text = resp.text
-            val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
-            Regex("""https?://[^"'\s,]+?\.m3u8[^"'\s,]*""").find(unescaped)?.value
+            val meta = parseJson<MetadataResponse>(resp.text)
+            meta.qualities?.auto?.firstOrNull { it.url?.contains(".m3u8") == true }?.url
         } catch (e: Exception) {
             Log.w(TAG, "Metadata API failed: ${e.message}")
             null
         }
     }
+
+    @kotlinx.serialization.Serializable
+    data class MetadataResponse(
+        val qualities: QualitiesMap? = null
+    )
+
+    @kotlinx.serialization.Serializable
+    data class QualitiesMap(
+        val auto: List<Stream>? = null
+    )
+
+    @kotlinx.serialization.Serializable
+    data class Stream(
+        val type: String? = null,
+        val url: String? = null
+    )
 
     private suspend fun parseMasterAndEmit(masterUrl: String, callback: (ExtractorLink) -> Unit) {
         try {
@@ -130,23 +146,16 @@ open class DailymotionFixed : ExtractorApi() {
                 return
             }
 
-            val variantRegex = Regex("""#EXT-X-STREAM-INF(.*?)\n([^#\n]+)""", RegexOption.DOT_MATCHES_ALL)
-            val matches = variantRegex.findAll(body).toList()
+            // Parse best quality from master, then emit the master URL itself
+            // (individual variant sub-playlists are video-only; audio is separate
+            // in #EXT-X-MEDIA:TYPE=AUDIO, so player needs the full master)
+            val variantRegex = Regex("""#EXT-X-STREAM-INF(.*?)\n""", RegexOption.DOT_MATCHES_ALL)
+            val bestQuality = variantRegex.findAll(body)
+                .map { parseQuality(it.groupValues[1]) }
+                .filter { it != Qualities.Unknown.value }
+                .maxOrNull() ?: Qualities.Unknown.value
 
-            if (matches.isEmpty()) {
-                emitLink(masterUrl, Qualities.Unknown.value, callback)
-                return
-            }
-
-            matches.forEach { match ->
-                val params = match.groupValues[1]
-                val variantUrl = match.groupValues[2].trim()
-
-                val quality = parseQuality(params)
-
-                val fullUrl = resolveRelativeUrl(masterUrl, variantUrl)
-                emitLink(fullUrl, quality, callback)
-            }
+            emitLink(masterUrl, bestQuality, callback)
         } catch (e: Exception) {
             Log.w(TAG, "Master parse failed: ${e.message}")
             emitLink(masterUrl, Qualities.Unknown.value, callback)
@@ -183,15 +192,6 @@ open class DailymotionFixed : ExtractorApi() {
             bandwidth >= 1_000_000 -> Qualities.P480.value
             bandwidth >= 500_000   -> Qualities.P360.value
             else                   -> Qualities.Unknown.value
-        }
-    }
-
-    private fun resolveRelativeUrl(base: String, relative: String): String {
-        return if (relative.startsWith("http")) relative
-        else if (relative.startsWith("//")) "https:$relative"
-        else {
-            val basePath = base.substringBeforeLast("/")
-            "$basePath/$relative"
         }
     }
 
