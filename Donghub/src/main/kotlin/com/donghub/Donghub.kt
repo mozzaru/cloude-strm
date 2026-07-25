@@ -153,8 +153,7 @@ class Donghub : MainAPI() {
         val rawTitle = aTag.attr("title").ifBlank {
             selectFirst("div.tt")?.ownText().orEmpty()
         }.ifBlank { aTag.text() }.trim()
-        val rawHref = fixUrl(aTag.attr("href"))
-        val href = episodeUrlToSeriesUrl(rawHref) ?: rawHref
+        val href = fixUrl(aTag.attr("href"))
         val img = aTag.selectFirst("img")
 
         val posterUrlRaw = img?.run {
@@ -271,9 +270,10 @@ class Donghub : MainAPI() {
         }
 
         val episodeList = document.select("div.eplister ul li")
-        val isSeries    = episodeList.isNotEmpty()
-        val tvType      = if (isSeries) TvType.Anime else TvType.Movie
-    
+        val hasPlayer = extractDirectIframe(document) != null
+        val isSeries  = episodeList.isNotEmpty()
+        val tvType    = if (isSeries || hasPlayer) TvType.Anime else TvType.Movie
+
         val episodes = if (isSeries) {
             episodeList.mapNotNull { li ->
                 val a      = li.selectFirst("a") ?: return@mapNotNull null
@@ -294,8 +294,10 @@ class Donghub : MainAPI() {
                 }
             }.reversed()
         } else {
-            val playUrl = extractDirectIframe(document) ?: seriesUrl
-            listOf(newEpisode(playUrl) { name = "Movie"; posterUrl = poster })
+            listOf(newEpisode(url) {
+                this.name = title.ifBlank { "Movie" }
+                this.posterUrl = poster
+            })
         }
 
         return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
