@@ -376,39 +376,39 @@ class Donghub : MainAPI() {
 
         val document = app.get(data, headers = baseHeaders).document
 
-        // Theme baru: direct iframe di .player-embed
+        val sources = mutableListOf<Pair<String, String>>()
+
         val directSrc = extractDirectIframe(document)
         if (directSrc != null) {
-            Log.i(TAG, "Direct iframe found: $directSrc")
-            resolveVideo(directSrc, data, subtitleCallback, callback)
-            Log.i(TAG, "=== loadLinks done ===")
-            return true
+            Log.i(TAG, "Direct iframe: $directSrc")
+            sources.add("Player" to directSrc)
         }
 
-        // Fallback: mobius base64
-        val options = document.select(".mobius option")
-        Log.i(TAG, "Mobius options: ${options.size}")
-
-        val otherOptions = mutableListOf<Pair<String, String>>()
-        options.forEach { server ->
-            val label = server.text().trim()
-            val b64 = server.attr("value").trim()
+        document.select(".mobius option").forEach { opt ->
+            val label = opt.text().trim()
+            val b64 = opt.attr("value").trim()
             if (b64.isBlank()) return@forEach
             val decoded = base64Decode(b64)
-            if (decoded.isNotBlank()) otherOptions.add(label to decoded)
-        }
-
-        otherOptions.amap { (label, decoded) ->
+            if (decoded.isBlank()) return@forEach
             val src = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src").orEmpty()
                 .ifBlank { Jsoup.parse(decoded).selectFirst("video source")?.attr("src").orEmpty() }
-            if (src.isBlank()) return@amap
+            if (src.isBlank()) return@forEach
             val finalUrl = when {
                 src.startsWith("http") -> src
-                src.startsWith("//")   -> "https:$src"
-                else -> return@amap
+                src.startsWith("//") -> "https:$src"
+                else -> return@forEach
             }
             Log.i(TAG, "[$label] → $finalUrl")
-            resolveVideo(finalUrl, data, subtitleCallback, callback)
+            sources.add(label to finalUrl)
+        }
+
+        if (sources.isEmpty()) {
+            Log.w(TAG, "No sources found")
+            return false
+        }
+
+        sources.amap { (label, url) ->
+            resolveVideo(url, data, subtitleCallback, callback)
         }
 
         Log.i(TAG, "=== loadLinks done ===")
