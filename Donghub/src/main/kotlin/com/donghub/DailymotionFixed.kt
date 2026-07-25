@@ -48,7 +48,10 @@ open class DailymotionFixed : ExtractorApi() {
                 .takeIf { it.matches(Regex("^[kx][a-zA-Z0-9]+$")) }
     }
 
-    private fun headers(referer: String) = mapOf(
+    private fun headers(referer: String, isCDN: Boolean = false) = if (isCDN) mapOf(
+        "User-Agent" to USER_AGENT,
+        "Referer" to referer,
+    ) else mapOf(
         "User-Agent" to USER_AGENT,
         "Referer" to referer,
         "Origin" to "https://www.dailymotion.com",
@@ -70,12 +73,15 @@ open class DailymotionFixed : ExtractorApi() {
             return
         }
 
+        // Use Dailymotion referer for CDN requests — CDN checks this header
+        val cdnReferer = "https://www.dailymotion.com/"
+
         for (masterUrl in candidates) {
-            if (tryParseAndEmit(masterUrl, referer, callback)) return
+            if (tryParseAndEmit(masterUrl, cdnReferer, callback)) return
         }
 
         Log.w(TAG, "All CDN URLs failed, emitting last one anyway")
-        emitLink(candidates.last(), referer, Qualities.Unknown.value, callback)
+        emitLink(candidates.last(), cdnReferer, Qualities.Unknown.value, callback)
     }
 
     private suspend fun tryMetadataApi(videoId: String, referer: String): String? {
@@ -157,7 +163,7 @@ open class DailymotionFixed : ExtractorApi() {
         return try {
             Log.i(TAG, "CDN request: $masterUrl")
             Log.i(TAG, "CDN headers: User-Agent=${USER_AGENT.take(30)}..., Referer=$referer")
-            val resp = app.get(masterUrl, headers = headers(referer))
+            val resp = app.get(masterUrl, headers = headers(referer, isCDN = true))
             val body = resp.text
             Log.i(TAG, "CDN response: status=${resp.code}, content-type=${resp.headers?.get("Content-Type")}, length=${body.length}")
 
