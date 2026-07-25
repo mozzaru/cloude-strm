@@ -1,38 +1,31 @@
 package com.donghub
 
-import com.lagradost.cloudstream3.*
+import com.lagradost.api.Log
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
 import com.google.gson.Gson
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class RpmvidExtractor : ExtractorApi() {
-    override val name = "Rpmvid"
+class RpmShare : ExtractorApi() {
+    override val name = "RpmShare"
     override val mainUrl = "https://anichin.rpmvid.com"
     override val requiresReferer = true
 
     companion object {
-        private const val UA_MOBILE =
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/149.0.0.0 Mobile Safari/537.36"
-
+        private const val UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36"
         private val AES_KEY = hexToBytes("6b69656d7469656e6d75613931316361")
         private val AES_IV = hexToBytes("313233343536373839306f6975797472")
 
-        private fun hexToBytes(hex: String): ByteArray =
-            ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        private fun hexToBytes(hex: String): ByteArray = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
-        fun decryptResponse(hexStr: String): String? {
-            val data = try {
-                hexToBytes(hexStr.trim())
-            } catch (e: Exception) { return null }
-
+        private fun decryptResponse(hexStr: String): String? {
+            val data = try { hexToBytes(hexStr.trim()) } catch (e: Exception) { return null }
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             val keySpec = SecretKeySpec(AES_KEY, "AES")
             val ivSpec = IvParameterSpec(AES_IV)
-
             for (skip in listOf(0, 4)) {
                 val ct = if (skip > 0) data.copyOfRange(skip, data.size) else data
                 if (ct.size % 16 != 0) continue
@@ -45,12 +38,14 @@ class RpmvidExtractor : ExtractorApi() {
         }
     }
 
-    data class RpmvidResponse(
-        val hlsVideoTiktok : String? = null,
-        val source : String? = null,
-        val cf : String? = null,
-        val title : String? = null,
-        val poster : String? = null,
+    data class RpmResponse(
+        val hlsVideoTiktok: String? = null,
+        val source: String? = null,
+        val cf: String? = null,
+        val cfNative: String? = null,
+        val title: String? = null,
+        val poster: String? = null,
+        val pk: Map<String, Any>? = null,
     )
 
     override suspend fun getUrl(
@@ -59,87 +54,144 @@ class RpmvidExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val videoId = when {
-            url.contains("#") -> url.substringAfterLast("#").trim()
-            url.contains("id=") -> url.substringAfter("id=").substringBefore("&").trim()
-            else -> return
-        }
-        if (videoId.isBlank()) return
-
         try {
-            app.get(
-                "$mainUrl/#$videoId",
-                headers = mapOf(
-                    "User-Agent"      to UA_MOBILE,
-                    "Referer"         to (referer ?: "https://donghub.vip/"),
-                    "sec-fetch-dest"  to "iframe",
-                    "sec-fetch-mode"  to "navigate",
-                    "sec-fetch-site"  to "cross-site",
-                )
-            )
-        } catch (_: Exception) {}
+            Log.d("RpmShare", "getUrl: $url, referer: $referer")
 
-        val apiUrl = "$mainUrl/api/v1/video?id=$videoId&w=360&h=800&r=donghub.vip"
-        val rawResponse = app.get(
-            apiUrl,
-            headers = mapOf(
-                "User-Agent"      to UA_MOBILE,
-                "Referer"         to "$mainUrl/",
-                "Origin"          to mainUrl,
-                "sec-fetch-dest"  to "empty",
-                "sec-fetch-mode"  to "cors",
-                "sec-fetch-site"  to "same-origin",
-            )
-        ).text.trim()
-
-        val jsonText: String = if (rawResponse.startsWith("{")) {
-            rawResponse
-        } else {
-            decryptResponse(rawResponse) ?: return
-        }
-
-        // FIX 1: Use Gson directly instead of tryParseJson
-        val json: RpmvidResponse = try {
-            Gson().fromJson(jsonText, RpmvidResponse::class.java)
-        } catch (e: Exception) {
-            return
-        } ?: return
-
-        val streams = mutableListOf<Pair<String, String>>()
-
-        // FIX 2: Explicit String type on takeIf to avoid type inference errors
-        val tiktokPath: String? = json.hlsVideoTiktok
-        if (!tiktokPath.isNullOrBlank()) {
-            val absUrl = if (tiktokPath.startsWith("http")) tiktokPath else "$mainUrl$tiktokPath"
-            streams.add("Rpmvid Tiktok" to absUrl)
-        }
-
-        val sourcePath: String? = json.source
-        if (!sourcePath.isNullOrBlank()) {
-            streams.add("Rpmvid Source" to sourcePath)
-        }
-
-        val cfPath: String? = json.cf
-        if (!cfPath.isNullOrBlank()) {
-            streams.add("Rpmvid CF" to cfPath)
-        }
-
-        streams.forEach { (streamName, streamUrl) ->
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = streamName,
-                    url = streamUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.referer = "$mainUrl/"
-                    this.headers = mapOf(
-                        "User-Agent" to UA_MOBILE,
-                        "Origin"     to mainUrl,
-                    )
+            val videoId = when {
+                url.contains("#") -> url.substringAfterLast("#").trim()
+                url.contains("id=") -> url.substringAfter("id=").substringBefore("&").trim()
+                url.contains("v=") -> url.substringAfter("v=").substringBefore("&").trim()
+                url.contains("/embed/") -> url.substringAfter("/embed/").substringBefore("?").trim()
+                url.contains("/e/") -> url.substringAfter("/e/").substringBefore("?").trim()
+                else -> {
+                    val lastPath = url.substringAfterLast("/").substringBefore("?").substringBefore("#")
+                    lastPath.takeIf { it.isNotBlank() && !it.contains(".") }
                 }
-            )
+            }
+            if (videoId.isNullOrBlank()) {
+                Log.w("RpmShare", "Could not extract video ID from URL: $url")
+                return
+            }
+
+            Log.d("RpmShare", "Extracted video ID: $videoId")
+
+            try {
+                Log.d("RpmShare", "Sending warm-up request to embed page...")
+                app.get(
+                    "$mainUrl/#$videoId",
+                    headers = mapOf(
+                        "User-Agent" to UA,
+                        "Referer" to (referer ?: "https://donghub.vip/"),
+                    )
+                )
+                Log.d("RpmShare", "Warm-up done")
+            } catch (e: Exception) {
+                Log.d("RpmShare", "Warm-up request failed (non-fatal): ${e.message}")
+            }
+
+            val apiUrl = "$mainUrl/api/v1/video?id=$videoId&w=360&h=800"
+            Log.d("RpmShare", "Fetching API: $apiUrl")
+
+            val rawResponse = try {
+                app.get(
+                    apiUrl,
+                    headers = mapOf(
+                        "User-Agent" to UA,
+                        "Referer" to "$mainUrl/",
+                        "Origin" to mainUrl,
+                        "sec-fetch-dest" to "empty",
+                        "sec-fetch-mode" to "cors",
+                        "sec-fetch-site" to "same-origin",
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("RpmShare", "API request FAILED: ${e.message}")
+                return
+            }
+            val rawText = rawResponse.text.trim()
+            Log.d("RpmShare", "API response size: ${rawText.length}")
+            Log.d("RpmShare", "API response starts with: ${rawText.take(200)}")
+
+            val jsonText = if (rawText.startsWith("{")) {
+                Log.d("RpmShare", "Response is JSON, no decryption needed")
+                rawText
+            } else {
+                Log.d("RpmShare", "Response is not JSON, attempting AES-CBC decryption...")
+                val decrypted = decryptResponse(rawText)
+                if (decrypted == null) {
+                    Log.w("RpmShare", "Decryption FAILED")
+                    Log.d("RpmShare", "Raw hex response length: ${rawText.length}")
+                    return
+                }
+                Log.d("RpmShare", "Decryption SUCCESS, result: ${decrypted.take(200)}")
+                decrypted
+            }
+
+            val json = try {
+                Gson().fromJson(jsonText, RpmResponse::class.java)
+            } catch (e: Exception) {
+                Log.w("RpmShare", "JSON parse FAILED: ${e.message}")
+                Log.d("RpmShare", "JSON text: ${jsonText.take(500)}")
+                return
+            }
+            Log.d("RpmShare", "Parsed JSON: hlsVideoTiktok=${json.hlsVideoTiktok?.take(50)}, source=${json.source?.take(50)}, cf=${json.cf?.take(50)}")
+
+            val streams = mutableListOf<Pair<String, String>>()
+            json.hlsVideoTiktok?.takeIf { it.isNotBlank() }?.let {
+                val absUrl = if (it.startsWith("http")) it else "$mainUrl$it"
+                streams.add("RpmShare Tiktok" to absUrl)
+            }
+            json.source?.takeIf { it.isNotBlank() }?.let {
+                streams.add("RpmShare Source" to it)
+            }
+            json.cf?.takeIf { it.isNotBlank() }?.let {
+                streams.add("RpmShare CF" to it)
+            }
+            json.cfNative?.takeIf { it.isNotBlank() }?.let {
+                streams.add("RpmShare CF Native" to it)
+            }
+
+            if (streams.isEmpty()) {
+                Log.w("RpmShare", "No streams in response - all null/blank")
+                return
+            }
+
+            streams.forEach { (streamName, streamUrl) ->
+                Log.d("RpmShare", "Verifying stream: $streamName -> ${streamUrl.take(80)}...")
+                try {
+                    val verifyResp = app.get(streamUrl, headers = mapOf(
+                        "User-Agent" to UA,
+                        "Referer" to "$mainUrl/",
+                        "Origin" to mainUrl,
+                    ))
+                    Log.d("RpmShare", "  Stream size: ${verifyResp.text.length}")
+                    if (verifyResp.text.startsWith("#EXTM3U")) {
+                        val variants = Regex("#EXT-X-STREAM-INF").findAll(verifyResp.text).count()
+                        val segments = Regex("#EXTINF").findAll(verifyResp.text).count()
+                        Log.d("RpmShare", "  Valid m3u8: $variants variants, $segments segments")
+                    } else {
+                        Log.w("RpmShare", "  Response is NOT m3u8: ${verifyResp.text.take(200)}")
+                    }
+                } catch (e: Exception) {
+                    Log.w("RpmShare", "  Stream verification FAILED: ${e.message}")
+                }
+
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = streamName,
+                        url = streamUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.referer = "$mainUrl/"
+                        this.headers = mapOf("User-Agent" to UA, "Origin" to mainUrl)
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            Log.w("RpmShare", "UNCAUGHT EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
         }
     }
 }

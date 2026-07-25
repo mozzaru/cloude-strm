@@ -349,11 +349,6 @@ class Donghub : MainAPI() {
 
         Log.i(TAG, "Server options found: ${options.size}")
 
-        // Keep Mega resolution separate from normal sources. The proxy setup
-        // (API + localhost socket) is done before normal callbacks, but it does
-        // not download media until the user selects Mega. Callback ordering is
-        // intentional: CloudStream shows later callbacks above earlier ones.
-        val megaOptions = mutableListOf<Pair<String, String>>()   // serverLabel to decoded
         val otherOptions = mutableListOf<Pair<String, String>>()
 
         options.forEach { server ->
@@ -368,10 +363,7 @@ class Donghub : MainAPI() {
                 Log.w(TAG, "[$serverLabel] Skipped — decode result blank")
                 return@forEach
             }
-            val looksLikeMega = decoded.contains("mega.nz", ignoreCase = true) ||
-                decoded.contains("mega.co.nz", ignoreCase = true)
-            if (looksLikeMega) megaOptions.add(serverLabel to decoded)
-            else otherOptions.add(serverLabel to decoded)
+            otherOptions.add(serverLabel to decoded)
         }
 
         suspend fun resolveOne(serverLabel: String, decoded: String) {
@@ -399,23 +391,22 @@ class Donghub : MainAPI() {
             }
 
             Log.i(TAG, "[$serverLabel] → $finalUrl")
-            Log.d(TAG, "[$serverLabel] ▶ loadExtractor")
-            loadExtractor(finalUrl, data, subtitleCallback, callback)
+
+            // Panggil DailymotionFixed LANGSUNG kalau URL-nya dailymotion,
+            // supaya gak ambigu sama Dailymotion/Geodailymotion bawaan core
+            // library yang sudah otomatis terdaftar di APK. loadExtractor()
+            // generik tidak menjamin custom extractor kamu yang dipanggil
+            // duluan kalau ada dua extractor dengan mainUrl yang overlap.
+            when {
+                finalUrl.contains("geo.dailymotion.com") -> 
+                    GeodailymotionFixed().getUrl(finalUrl, data, subtitleCallback, callback)
+                finalUrl.contains("dailymotion.com") -> 
+                    DailymotionFixed().getUrl(finalUrl, data, subtitleCallback, callback)
+                else -> 
+                    loadExtractor(finalUrl, data, subtitleCallback, callback)
+            }
         }
 
-        // CloudStream inserts each callback at the top of the source picker.
-        // Resolve Mega FIRST so its callback is inserted first and later
-        // DTube/Dailymotion callbacks stay above it. This makes a lightweight
-        // remote source the default instead of auto-selecting the local Mega
-        // proxy whenever the episode is opened.
-        //
-        // Starting a Mega proxy does not fetch video bytes; CDN traffic begins
-        // only after ExoPlayer actually selects its localhost URL.
-        //megaOptions.forEach { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
-
-        // Resolve the normal streaming sources after Mega. They remain parallel
-        // with each other, but their callbacks deliberately arrive last so they
-        // occupy the first/default positions in the picker.
         otherOptions.amap { (serverLabel, decoded) -> resolveOne(serverLabel, decoded) }
 
         Log.i(TAG, "=== loadLinks done ===")

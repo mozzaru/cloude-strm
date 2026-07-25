@@ -35,7 +35,7 @@ import java.math.BigInteger
  * yang dipakai. Kalau saat compile error di baris itu, cukup hapus argumen
  * `timeout = TIMEOUT_MS` (perilaku lama tanpa timeout eksplisit tetap jalan).
  */
-open class DtubeExtractor : ExtractorApi() {
+open class Dtube : ExtractorApi() {
     override var mainUrl = "https://play.d.tube"
     override val requiresReferer = true
     override var name = "DTube"

@@ -10,7 +10,9 @@ class DonghubProvider : BasePlugin() {
     override fun load() {
         registerMainAPI(Donghub())
         registerExtractorAPI(InternetArchive())
-        registerExtractorAPI(DtubeExtractor())
-        registerExtractorAPI(RpmvidExtractor())
+        registerExtractorAPI(Dtube())
+        registerExtractorAPI(RpmShare())
+        registerExtractorAPI(DailymotionFixed())
+        registerExtractorAPI(GeodailymotionFixed())
     }
 }
