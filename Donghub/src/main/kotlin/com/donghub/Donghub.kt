@@ -229,8 +229,20 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = baseHeaders).document
-        val seriesUrl = url
+        val firstDoc = app.get(url, headers = baseHeaders).document
+
+        val allEpsLink = firstDoc.selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
+
+        val seriesUrl: String
+        val document: org.jsoup.nodes.Document
+
+        if (allEpsLink != null) {
+            seriesUrl = fixUrl(allEpsLink)
+            document  = app.get(seriesUrl, headers = baseHeaders).document
+        } else {
+            seriesUrl = url
+            document  = firstDoc
+        }
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
