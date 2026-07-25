@@ -12,5 +12,6 @@ class DonghubProvider : BasePlugin() {
         registerExtractorAPI(Dtube())
         registerExtractorAPI(RpmShare())
         registerExtractorAPI(DailymotionFixed())
+        registerExtractorAPI(GeodailymotionFixed())
     }
 }

@@ -356,10 +356,14 @@ class Donghub : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        if (url.contains("dailymotion.com"))
-            DailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
-        else
-            loadExtractor(url, referer, subtitleCallback, callback)
+        when {
+            url.contains("geo.dailymotion.com") ->
+                GeodailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
+            url.contains("dailymotion.com") ->
+                DailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
+            else ->
+                loadExtractor(url, referer, subtitleCallback, callback)
+        }
     }
 
     override suspend fun loadLinks(
