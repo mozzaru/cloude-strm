@@ -11,13 +11,8 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
-class GeodailymotionFixed : DailymotionFixed() {
-    override val name = "GeoDailymotion"
-    override val mainUrl = "https://geo.dailymotion.com"
-}
-
-open class DailymotionFixed : ExtractorApi() {
-    override val name = "DailymotionFixed"
+class DailymotionFixed : ExtractorApi() {
+    override val name = "Dailymotion"
     override val mainUrl = "https://www.dailymotion.com"
     override val requiresReferer = true
 

@@ -356,14 +356,10 @@ class Donghub : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        when {
-            url.contains("geo.dailymotion.com") ->
-                GeodailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
-            url.contains("dailymotion.com") ->
-                DailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
-            else ->
-                loadExtractor(url, referer, subtitleCallback, callback)
-        }
+        if (url.contains("dailymotion.com"))
+            DailymotionFixed().getUrl(url, referer, subtitleCallback, callback)
+        else
+            loadExtractor(url, referer, subtitleCallback, callback)
     }
 
     override suspend fun loadLinks(
@@ -407,8 +403,9 @@ class Donghub : MainAPI() {
             return false
         }
 
+        val seen = mutableSetOf<String>()
         sources.amap { (label, url) ->
-            resolveVideo(url, data, subtitleCallback, callback)
+            if (seen.add(url)) resolveVideo(url, data, subtitleCallback, callback)
         }
 
         Log.i(TAG, "=== loadLinks done ===")
