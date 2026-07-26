@@ -7,8 +7,6 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class AnichinProvider: BasePlugin() {
     override fun load() {
         registerMainAPI(Anichin())
-        registerExtractorAPI(OkRuSSL())
-        registerExtractorAPI(OkRuHTTP())
         registerExtractorAPI(Rumble())
         registerExtractorAPI(StreamRuby())
         registerExtractorAPI(svilla())
