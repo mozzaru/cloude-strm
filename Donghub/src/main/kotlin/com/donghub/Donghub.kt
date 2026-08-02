@@ -121,6 +121,7 @@ class Donghub : MainAPI() {
                lower.contains("don't forget to watch online") ||
                lower.contains("watch full episodes") ||
                lower.contains("english subbed on donghub") ||
+               lower.contains("subtitle indonesia") ||
                lower.contains("subtitle indonesia hanya di") ||
                lower.contains("mp4 mkv hardsub softsub") ||
                lower.contains("360p") || lower.contains("480p") ||
@@ -135,7 +136,7 @@ class Donghub : MainAPI() {
                (lower.contains("nonton") && lower.contains("download")) ||
                Regex("episode\\s*\\d+\\s*(english sub|sub indo|subtitle)", RegexOption.IGNORE_CASE)
                    .containsMatchIn(text) ||
-               text.split(",").size > 12
+               text.split(",").size > 25
     }
 
     private fun parseBilingualSynopsis(el: org.jsoup.nodes.Element): String {
@@ -143,7 +144,7 @@ class Donghub : MainAPI() {
         val eng = mutableListOf<String>()
         var current = "eng"
 
-        el.children().forEach { child ->
+        el.select("h1, h2, h3, h4, p").forEach { child ->
             when (child.tagName()) {
                 "h1", "h2", "h3", "h4" -> {
                     val heading = child.text().trim().lowercase()
@@ -152,7 +153,7 @@ class Donghub : MainAPI() {
                         heading.contains("eng")  -> current = "eng"
                     }
                 }
-                "p" -> {
+                else -> {
                     val t = child.text().trim()
                     if (t.isBlank() || isKeywordJunk(t)) return@forEach
                     if (current == "indo") indo.add(t) else eng.add(t)
@@ -160,7 +161,7 @@ class Donghub : MainAPI() {
             }
         }
 
-        return (indo + eng).joinToString("\n\n").trim()
+        return (if (indo.isNotEmpty()) indo else eng).joinToString("\n\n").trim()
     }
 
     private fun cleanEpisodeTitle(rawTitle: String, seriesTitle: String, epNum: Int?): String {
@@ -293,10 +294,11 @@ class Donghub : MainAPI() {
                 ?.attr("content")?.trim().orEmpty()
 
             when {
-                synpText.isNotBlank()    -> synpText
+                synpText.isNotBlank()    && !isGenericTemplate(synpText)    -> synpText
                 descText.isNotBlank()    && !isGenericTemplate(descText)    -> descText
                 mindescText.isNotBlank() && !isGenericTemplate(mindescText) -> mindescText
-                metaDesc.isNotBlank()    && metaDesc != title               -> metaDesc
+                metaDesc.isNotBlank()    && metaDesc != title &&
+                    !isGenericTemplate(metaDesc) -> metaDesc
                 else -> null
             }
         }
