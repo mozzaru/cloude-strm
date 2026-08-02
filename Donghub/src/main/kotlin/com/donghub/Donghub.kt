@@ -16,9 +16,6 @@ class Donghub : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9",
-        "Cache-Control" to "no-cache, no-store, must-revalidate",
-        "Pragma" to "no-cache",
-        "Expires" to "0",
         "Upgrade-Insecure-Requests" to "1",
         "Referer" to "https://www.google.com/",
         "Sec-Ch-Ua" to "\"Chromium\";v=\"147\", \"Not.A/Brand\";v=\"8\"",
@@ -169,10 +166,12 @@ class Donghub : MainAPI() {
         val eggTypeClass = selectFirst("div.eggtype")
             ?.classNames()?.firstOrNull { it != "eggtype" }
             ?.lowercase().orEmpty()
+        val eggTypeLabel = selectFirst("div.eggtype")?.text()?.lowercase().orEmpty()
         val typeLabel = selectFirst(".typez")?.text()?.lowercase().orEmpty()
         val type = if (href.contains("/movie/", ignoreCase = true) ||
             typeLabel.contains("movie") ||
-            eggTypeClass == "movie"
+            eggTypeClass == "movie" ||
+            eggTypeLabel.contains("movie")
         ) TvType.Movie else TvType.Anime
 
         val epNum: Int?
@@ -281,10 +280,19 @@ class Donghub : MainAPI() {
             else        -> null
         }
 
+        val typeRaw = document.select("div.spe span")
+            .firstOrNull { it.text().startsWith("Type:") }
+            ?.text()?.removePrefix("Type:")?.trim().orEmpty()
+
         val episodeList = document.select("div.eplister ul li")
         val hasPlayer = extractDirectIframe(document) != null
         val isSeries  = episodeList.isNotEmpty()
-        val tvType    = if (isSeries || hasPlayer) TvType.Anime else TvType.Movie
+        val tvType = when {
+            typeRaw.isNotBlank() ->
+                if (typeRaw.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
+            isSeries || hasPlayer -> TvType.Anime
+            else -> TvType.Movie
+        }
 
         val episodes = if (isSeries) {
             episodeList.mapNotNull { li ->
@@ -408,7 +416,7 @@ class Donghub : MainAPI() {
         }
 
         val seen = mutableSetOf<String>()
-        sources.amap { (label, url) ->
+        for ((label, url) in sources) {
             if (seen.add(url)) resolveVideo(url, data, subtitleCallback, callback)
         }
 
