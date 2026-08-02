@@ -109,6 +109,18 @@ class Donghub : MainAPI() {
         )
     }
 
+    private suspend fun loadSeriesViaEpisode(episodeUrl: String): Pair<String, org.jsoup.nodes.Document> {
+        val firstDoc = app.get(episodeUrl, headers = baseHeaders).document
+        val allEpsLink = firstDoc
+            .selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
+        return if (allEpsLink != null) {
+            val seriesUrl = fixUrl(allEpsLink)
+            seriesUrl to app.get(seriesUrl, headers = baseHeaders).document
+        } else {
+            episodeUrl to firstDoc
+        }
+    }
+
     private fun extractEpNumFromText(text: String): Int? {
         return Regex("episode[- ](\\d+)", RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.get(1)?.toIntOrNull()
@@ -134,9 +146,17 @@ class Donghub : MainAPI() {
         val lower = text.lowercase()
         return lower.contains("watch and download") ||
                (lower.contains("nonton") && lower.contains("download")) ||
+               lower.contains("watch all the episodes") ||
+               lower.contains("multi sub") ||
                Regex("episode\\s*\\d+\\s*(english sub|sub indo|subtitle)", RegexOption.IGNORE_CASE)
-                   .containsMatchIn(text) ||
-               text.split(",").size > 25
+                   .containsMatchIn(text)
+    }
+
+    private fun isLangMarker(text: String): Boolean {
+        val t = text.lowercase().trim()
+        if (t.length > 15) return false
+        return t == "english" || t == "eng" || t == "indonesia" || t == "indonesian" ||
+               t == "indo" || t == "ind" || t == "bahasa indonesia"
     }
 
     private fun parseBilingualSynopsis(el: org.jsoup.nodes.Element): String {
@@ -145,16 +165,21 @@ class Donghub : MainAPI() {
         var current = "eng"
 
         el.select("h1, h2, h3, h4, p").forEach { child ->
-            when (child.tagName()) {
-                "h1", "h2", "h3", "h4" -> {
-                    val heading = child.text().trim().lowercase()
+            val t = child.text().trim()
+            when {
+                child.tagName() == "p" && isLangMarker(t) ->
+                    current = if (t.lowercase().contains("indo")) "indo" else "eng"
+
+                child.tagName() == "h1" || child.tagName() == "h2" ||
+                    child.tagName() == "h3" || child.tagName() == "h4" -> {
+                    val heading = t.lowercase()
                     when {
                         heading.contains("indo") -> current = "indo"
                         heading.contains("eng")  -> current = "eng"
                     }
                 }
+
                 else -> {
-                    val t = child.text().trim()
                     if (t.isBlank() || isKeywordJunk(t)) return@forEach
                     if (current == "indo") indo.add(t) else eng.add(t)
                 }
@@ -263,19 +288,33 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val firstDoc = app.get(url, headers = baseHeaders).document
-
-        val allEpsLink = firstDoc.selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
+        // Episode URLs follow "{slug}-episode-{n}-subtitle-indonesia/" — derive the
+        // series URL directly so home/search clicks need only one request.
+        // Some slugs are abbreviated in episode URLs (e.g. "-s5-" vs "-season-5"),
+        // so the derived page is validated: if it isn't a real series page
+        // (no episode list, no synopsis) we fall back to the "All Episodes" link.
+        val derivedSeriesUrl = Regex(
+            "(.*?)-episode-\\d+(?:-\\d+)?-subtitle-indonesia/?$",
+            RegexOption.IGNORE_CASE
+        ).find(url)?.groupValues?.get(1)?.let { fixUrl("$it/") }
 
         val seriesUrl: String
         val document: org.jsoup.nodes.Document
 
-        if (allEpsLink != null) {
-            seriesUrl = fixUrl(allEpsLink)
-            document  = app.get(seriesUrl, headers = baseHeaders).document
+        if (derivedSeriesUrl != null) {
+            val derivedDoc = app.get(derivedSeriesUrl, headers = baseHeaders).document
+            if (derivedDoc.selectFirst("div.eplister, div.bixbox.synp") != null) {
+                seriesUrl = derivedSeriesUrl
+                document  = derivedDoc
+            } else {
+                val fallback = loadSeriesViaEpisode(url)
+                seriesUrl   = fallback.first
+                document    = fallback.second
+            }
         } else {
-            seriesUrl = url
-            document  = firstDoc
+            val fallback = loadSeriesViaEpisode(url)
+            seriesUrl   = fallback.first
+            document    = fallback.second
         }
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
