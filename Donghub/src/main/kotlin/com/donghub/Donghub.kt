@@ -129,6 +129,40 @@ class Donghub : MainAPI() {
                text.length < 30
     }
 
+    private fun isKeywordJunk(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("watch and download") ||
+               (lower.contains("nonton") && lower.contains("download")) ||
+               Regex("episode\\s*\\d+\\s*(english sub|sub indo|subtitle)", RegexOption.IGNORE_CASE)
+                   .containsMatchIn(text) ||
+               text.split(",").size > 12
+    }
+
+    private fun parseBilingualSynopsis(el: org.jsoup.nodes.Element): String {
+        val indo = mutableListOf<String>()
+        val eng = mutableListOf<String>()
+        var current = "eng"
+
+        el.children().forEach { child ->
+            when (child.tagName()) {
+                "h1", "h2", "h3", "h4" -> {
+                    val heading = child.text().trim().lowercase()
+                    when {
+                        heading.contains("indo") -> current = "indo"
+                        heading.contains("eng")  -> current = "eng"
+                    }
+                }
+                "p" -> {
+                    val t = child.text().trim()
+                    if (t.isBlank() || isKeywordJunk(t)) return@forEach
+                    if (current == "indo") indo.add(t) else eng.add(t)
+                }
+            }
+        }
+
+        return (indo + eng).joinToString("\n\n").trim()
+    }
+
     private fun cleanEpisodeTitle(rawTitle: String, seriesTitle: String, epNum: Int?): String {
         var clean = rawTitle
 
@@ -252,15 +286,14 @@ class Donghub : MainAPI() {
 
         val synopsis = run {
             val synpEl = document.selectFirst("div.bixbox.synp div.entry-content")
-            synpEl?.selectFirst("h1")?.remove()
-            val synpText    = synpEl?.text()?.trim().orEmpty()
+            val synpText: String = if (synpEl != null) parseBilingualSynopsis(synpEl) else ""
             val descText    = document.selectFirst("div.desc")?.text()?.trim().orEmpty()
             val mindescText = document.selectFirst("div.mindesc")?.text()?.trim().orEmpty()
             val metaDesc    = document.selectFirst("meta[property=og:description]")
                 ?.attr("content")?.trim().orEmpty()
 
             when {
-                synpText.isNotBlank()    && !isGenericTemplate(synpText)    -> synpText
+                synpText.isNotBlank()    -> synpText
                 descText.isNotBlank()    && !isGenericTemplate(descText)    -> descText
                 mindescText.isNotBlank() && !isGenericTemplate(mindescText) -> mindescText
                 metaDesc.isNotBlank()    && metaDesc != title               -> metaDesc
@@ -416,7 +449,7 @@ class Donghub : MainAPI() {
         }
 
         val seen = mutableSetOf<String>()
-        for ((label, url) in sources) {
+        sources.amap { (label, url) ->
             if (seen.add(url)) resolveVideo(url, data, subtitleCallback, callback)
         }
 
