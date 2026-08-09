@@ -19,5 +19,7 @@ class AnichinProvider: BasePlugin() {
         registerExtractorAPI(Turbovidhls())
         registerExtractorAPI(RpmShare())
         registerExtractorAPI(VidHide())
+        registerExtractorAPI(Morencius())
+        registerExtractorAPI(Dtube())
     }
 }
