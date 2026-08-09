@@ -165,12 +165,16 @@ class RpmShare : ExtractorApi() {
                         "Origin" to mainUrl,
                     ))
                     Log.d("RpmShare", "  Stream size: ${verifyResp.text.length}")
-                    if (verifyResp.text.startsWith("#EXTM3U")) {
-                        val variants = Regex("#EXT-X-STREAM-INF").findAll(verifyResp.text).count()
-                        val segments = Regex("#EXTINF").findAll(verifyResp.text).count()
+                    val body = verifyResp.text
+                    if (body.startsWith("#EXTM3U")) {
+                        // A master playlist may contain a single variant OR be a media
+                        // playlist directly (segments). Either is playable, so we only
+                        // require the #EXTM3U signature rather than >1 variants.
+                        val variants = Regex("#EXT-X-STREAM-INF").findAll(body).count()
+                        val segments = Regex("#EXTINF").findAll(body).count()
                         Log.d("RpmShare", "  Valid m3u8: $variants variants, $segments segments")
                     } else {
-                        Log.w("RpmShare", "  Response is NOT m3u8: ${verifyResp.text.take(200)}")
+                        Log.w("RpmShare", "  Response is NOT m3u8: ${body.take(200)}")
                     }
                 } catch (e: Exception) {
                     Log.w("RpmShare", "  Stream verification FAILED: ${e.message}")

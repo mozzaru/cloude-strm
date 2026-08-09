@@ -381,18 +381,12 @@ class Anichin : MainAPI() {
                 }
             }.reversed()
         } else {
-            val base64 = document.selectFirst(".mobius option[value]")?.attr("value")?.trim()
-            var playUrl: String? = null
-            if (!base64.isNullOrBlank()) {
-                try {
-                    val decoded = base64Decode(base64)
-                    val rawSrc = Jsoup.parse(decoded).selectFirst("iframe")?.attr("src")
-                    if (!rawSrc.isNullOrBlank()) {
-                        playUrl = if (rawSrc.startsWith("http")) rawSrc else "https:$rawSrc"
-                    }
-                } catch (_: Exception) {}
-            }
-            listOf(newEpisode(playUrl ?: seriesUrl) {
+            // For movies the series URL IS the player page (it holds the .mobius server
+            // options). loadLinks() must be given that page so it can find the servers,
+            // so we deliberately point the episode at seriesUrl and NOT at a resolved
+            // external player URL (which would contain no .mobius options and yield
+            // "no links found").
+            listOf(newEpisode(seriesUrl) {
                 name = "Movie"
                 posterUrl = poster
             })
@@ -415,47 +409,135 @@ class Anichin : MainAPI() {
     ): Boolean {
         Log.d("AnichinLoadLinks", "Loading links for: $data")
         val document = app.get(data, headers = browserHeaders).document
-        val serverCount = document.select(".mobius option").size
-        Log.d("AnichinLoadLinks", "Found $serverCount server options")
-        document.select(".mobius option").amap { server ->
+        val servers = document.select(".mobius option")
+        Log.d("AnichinLoadLinks", "Found ${servers.size} server options")
+
+        servers.amap { server ->
             val label = server.text().trim()
             val base64 = server.attr("value")
             if (base64.isBlank()) {
-                Log.w("AnichinLoadLinks", "Server '$label': blank base64, skipping")
+                Log.d("AnichinLoadLinks", "Server '$label': blank value (placeholder), skipping")
                 return@amap
             }
-            val decoded = try { base64Decode(base64) } catch (e: Exception) {
+            val decoded = try {
+                base64Decode(base64)
+            } catch (e: Exception) {
                 Log.w("AnichinLoadLinks", "Server '$label': base64 decode failed: ${e.message}")
                 return@amap
             }
             val doc = Jsoup.parse(decoded)
             val iframes = doc.select("iframe")
-            Log.d("AnichinLoadLinks", "Server '$label': decoded HTML has ${iframes.size} iframes")
             if (iframes.isEmpty()) {
-                Log.w("AnichinLoadLinks", "Server '$label': no iframe found")
-                Log.d("AnichinLoadLinks", "Server '$label': decoded HTML: ${decoded.take(500)}")
+                Log.w("AnichinLoadLinks", "Server '$label': no iframe in decoded HTML")
                 return@amap
             }
             val href = iframes.attr("src")
             if (href.isBlank()) {
                 Log.w("AnichinLoadLinks", "Server '$label': iframe src is blank")
-                iframes.forEachIndexed { i, f -> Log.d("AnichinLoadLinks", "  iframe[$i] attrs: ${f.attributes()}") }
                 return@amap
             }
-            val url = httpsify(href)
-            Log.d("AnichinLoadLinks", "Server '$label': loading extractor URL: $url")
-            if (url.contains("rpmvid.com") || url.contains("rpmvid")) {
-                Log.d("AnichinLoadLinks", "Server '$label': using direct RpmShare handler")
-                try {
-                    RpmShare().getUrl(url, null, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    Log.w("AnichinLoadLinks", "RpmShare direct call FAILED: ${e.message}")
-                }
-            } else {
-                loadExtractor(url, subtitleCallback, callback)
+            val wrapperUrl = httpsify(href)
+            Log.d("AnichinLoadLinks", "Server '$label': wrapper=$wrapperUrl")
+
+            // The decoded iframe points at an anichin.moe/stream/<token> wrapper which:
+            //   * returns HTTP 403 "hanya dapat diputar dari halaman anichin.moe" without a
+            //     Referer, and
+            //   * has NO extractor registered (only its inner iframe does).
+            // We must resolve it with a Referer to get the real player (ok.ru, dailymotion,
+            // rpmvid, rumble, ...) before dispatching to an extractor.
+            val innerUrl = resolveStreamWrapper(wrapperUrl, data) ?: run {
+                Log.w("AnichinLoadLinks", "Server '$label': could not resolve wrapper")
+                return@amap
+            }
+            Log.d("AnichinLoadLinks", "Server '$label': inner=$innerUrl")
+
+            try {
+                dispatchPlayer(innerUrl, data, subtitleCallback, callback)
+            } catch (e: Exception) {
+                Log.w("AnichinLoadLinks", "Server '$label': extractor failed: ${e.message}")
             }
         }
         return true
+    }
+
+    /**
+     * Resolves an `https://anichin.moe/stream/<token>` wrapper into the real player URL it
+     * embeds. These wrappers are protected by a Referer check (403 otherwise) and their
+     * response is a tiny HTML document containing a single `<iframe>` pointing at the actual
+     * host (ok.ru, geo.dailymotion.com, rpmvid, rumble, d.tube, ...).
+     *
+     * For the anichin-player.web.id relay (OK.ru / Dailymotion) we short-circuit to the final
+     * ok.ru / geo.dailymotion URL directly so we rely on the well-tested core extractors and
+     * avoid an extra, referer-dependent hop.
+     */
+    private suspend fun resolveStreamWrapper(wrapperUrl: String, referer: String): String? {
+        if (!wrapperUrl.contains("$mainUrl/stream/") && !wrapperUrl.contains("anichin.moe/stream/")) {
+            return wrapperUrl
+        }
+        return try {
+            val innerUrl = fetchStreamIframe(wrapperUrl, referer) ?: return null
+
+            when {
+                // anichin-player.web.id/index.php?ok=<id>  ->  https://ok.ru/videoembed/<id>
+                innerUrl.contains("anichin-player.web.id") && innerUrl.contains("?ok=") -> {
+                    val okId = innerUrl.substringAfter("?ok=").substringBefore("&").trim()
+                    "https://ok.ru/videoembed/$okId"
+                }
+                // anichin-player.web.id/index.php?url=<id> ->  geo.dailymotion.com/player.html?video=<id>
+                innerUrl.contains("anichin-player.web.id") && innerUrl.contains("?url=") -> {
+                    val dmId = innerUrl.substringAfter("?url=").substringBefore("&").trim()
+                    "https://geo.dailymotion.com/player.html?video=$dmId"
+                }
+                // Defensive: a /stream/ wrapper could theoretically nest once more.
+                innerUrl.contains("anichin.moe/stream/") ->
+                    fetchStreamIframe(innerUrl, wrapperUrl) ?: innerUrl
+                else -> innerUrl
+            }
+        } catch (e: Exception) {
+            Log.w("AnichinLoadLinks", "resolveStreamWrapper failed for $wrapperUrl: ${e.message}")
+            null
+        }
+    }
+
+    /** Fetches an anichin.moe/stream/<token> wrapper (Referer-protected, 403 otherwise)
+     *  and returns the absolute URL of its single inner iframe. */
+    private suspend fun fetchStreamIframe(wrapperUrl: String, referer: String): String? {
+        val wrapperHeaders = browserHeaders + mapOf(
+            // We are loading the /stream/ endpoint from within an anichin.moe page, so it is
+            // a same-origin, iframe-style sub-request.
+            "Referer" to referer,
+            "Sec-Fetch-Dest" to "iframe",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "same-origin",
+        )
+        val resp = app.get(wrapperUrl, headers = wrapperHeaders)
+        val html = resp.text
+        val innerSrc = Jsoup.parse(html).selectFirst("iframe")?.attr("src")?.takeIf { it.isNotBlank() }
+            ?: return null
+        return httpsify(innerSrc)
+    }
+
+    /**
+     * Routes a resolved player URL to the right extractor. Most hosts are handled by the core
+     * library or the bundled extractors via loadExtractor(); a few need the local bespoke
+     * extractor called directly (or a default referer set).
+     */
+    private suspend fun dispatchPlayer(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        when {
+            url.contains("rpmvid.com") -> {
+                Log.d("AnichinLoadLinks", " -> RpmShare extractor")
+                RpmShare().getUrl(url, referer, subtitleCallback, callback)
+            }
+            else -> {
+                Log.d("AnichinLoadLinks", " -> loadExtractor: $url")
+                loadExtractor(url, referer, subtitleCallback, callback)
+            }
+        }
     }
 
     private fun parseShowStatus(spans: List<String>): ShowStatus? {

@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.Jsoup
 
 class Rumble : ExtractorApi() {
     override var name = "Rumble"
@@ -23,48 +22,61 @@ class Rumble : ExtractorApi() {
     ) {
         Log.d("Rumble", "getUrl: $url")
         val response = app.get(url, referer = referer ?: "$mainUrl/")
-        val scriptData = response.document.selectFirst("script:containsData(mp4)")?.data()
-            ?.substringAfter("{\"mp4")?.substringBefore("\"evt\":{")
-        if (scriptData == null) {
-            Log.w("Rumble", "No mp4 script data found")
+        val html = response.text
+
+        // Current Rumble embed pages expose the playable sources in a JS object like:
+        //   b.f["<vid>"]={...,"u":{...,"hls":{"url":"https://rumble.com/hls-vod/<id>/playlist.m3u8"}}}
+        // The old "mp4":{...} JSON shape no longer exists, so we look for the HLS master
+        // playlist directly.
+        val hlsMatch = Regex("""\"hls\"\s*:\s*\{\"url\"\s*:\s*\"(https?:\\?/\\?/[^"]+playlist\.m3u8[^"]*)\"}""")
+            .find(html)
+            ?.groupValues?.getOrNull(1)
+            ?.replace("\\/", "/")
+            ?.replace("\\u002F", "/")
+
+        if (!hlsMatch.isNullOrBlank()) {
+            Log.d("Rumble", "Found HLS master: $hlsMatch")
+            verifyAndReturn(hlsMatch, callback)
             return
         }
 
-        Log.d("Rumble", "Found script data, extracting m3u8...")
-        val regex = """"url":"(.*?)"|h":(.*?)\}""".toRegex()
-        val matches = regex.findAll(scriptData)
+        // Fallback: any rumble.com/hls-vod/.../playlist.m3u8 on the page.
+        val fallback = Regex("""(https?:\\?/\\?/rumble\.com\\?/hls-vod\\?/[A-Za-z0-9_-]+\\?/playlist\.m3u8)""")
+            .find(html)?.groupValues?.getOrNull(1)
+            ?.replace("\\/", "/")
+            ?.replace("\\u002F", "/")
 
-        val processedUrls = mutableSetOf<String>()
-        var found = false
+        if (!fallback.isNullOrBlank()) {
+            Log.d("Rumble", "Fallback HLS master: $fallback")
+            verifyAndReturn(fallback, callback)
+            return
+        }
 
-        for (match in matches) {
-            val rawUrl = match.groupValues[1]
-            if (rawUrl.isBlank()) continue
+        Log.w("Rumble", "No HLS master playlist found in embed page")
+    }
 
-            val cleanedUrl = rawUrl.replace("\\/", "/")
-            if (!cleanedUrl.contains("rumble.com")) continue
-            if (!cleanedUrl.endsWith(".m3u8")) continue
-            if (!processedUrls.add(cleanedUrl)) continue
-
-            Log.d("Rumble", "Checking m3u8: ${cleanedUrl.take(80)}...")
-            val m3u8Response = app.get(cleanedUrl)
-            val variantCount = "#EXT-X-STREAM-INF".toRegex().findAll(m3u8Response.text).count()
-            Log.d("Rumble", "  Variants: $variantCount")
-
-            if (variantCount > 1) {
-                Log.d("Rumble", "Found valid m3u8 with $variantCount variants")
+    private suspend fun verifyAndReturn(m3u8Url: String, callback: (ExtractorLink) -> Unit) {
+        return try {
+            val resp = app.get(m3u8Url, referer = "$mainUrl/")
+            if (resp.text.startsWith("#EXTM3U")) {
+                val variants = Regex("#EXT-X-STREAM-INF").findAll(resp.text).count()
+                Log.d("Rumble", "Valid m3u8 ($variants variants)")
                 callback.invoke(
                     newExtractorLink(
-                        this@Rumble.name,
-                        "Rumble",
-                        cleanedUrl,
-                        ExtractorLinkType.M3U8
-                    )
+                        source = name,
+                        name = name,
+                        url = m3u8Url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
-                found = true
-                break
+            } else {
+                Log.w("Rumble", "URL did not return an m3u8: ${resp.text.take(200)}")
             }
+        } catch (e: Exception) {
+            Log.w("Rumble", "m3u8 verify failed: ${e.message}")
         }
-        if (!found) Log.w("Rumble", "No valid m3u8 found")
     }
 }

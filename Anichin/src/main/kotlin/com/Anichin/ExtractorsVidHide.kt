@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import java.util.regex.Pattern
 
-class VidHide : ExtractorApi() {
+open class VidHide : ExtractorApi() {
     override val name = "VidHide"
     override val mainUrl = "https://minochinos.com"
     override val requiresReferer = true
@@ -24,6 +24,12 @@ class VidHide : ExtractorApi() {
             val html = response.text
             Log.d("VidHide", "Page size: ${html.length}")
 
+            // Relative HLS paths (e.g. "/stream/...") must be resolved against the host that
+            // actually served the embed — not the hardcoded mainUrl — so subclasses that point
+            // at a different mirror (e.g. morencius.com) keep working.
+            val embedBase = Regex("""^(https?://[^/]+)""").find(response.url)?.groupValues?.get(1)
+                ?: mainUrl
+
             val decoded = decodePackedJs(html)
             if (decoded != null) {
                 Log.d("VidHide", "Decoded JS size: ${decoded.length}")
@@ -37,7 +43,11 @@ class VidHide : ExtractorApi() {
                     hls3?.groupValues?.get(1)?.takeIf { it.isNotBlank() },
                     hls2?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                 ).map {
-                    if (it.startsWith("http")) it else "$mainUrl$it"
+                    when {
+                        it.startsWith("http") -> it
+                        it.startsWith("//") -> "https:$it"
+                        else -> "$embedBase$it"
+                    }
                 }
 
                 Log.d("VidHide", "Found ${toTry.size} video URLs from decoded JS")
@@ -243,4 +253,14 @@ class VidHide : ExtractorApi() {
         }
         return false
     }
+}
+
+/**
+ * The Vidhide server on anichin currently proxies through morencius.com (previously
+ * minochinos.com). It serves the same JWPlayer packed-JS layout, so we reuse the VidHide
+ * extractor logic but register it for the new host so loadExtractor() dispatches correctly.
+ */
+class Morencius : VidHide() {
+    override val name = "VidHide"
+    override val mainUrl = "https://morencius.com"
 }
