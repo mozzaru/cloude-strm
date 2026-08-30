@@ -2,8 +2,12 @@ package com.donghub
 
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.Base64
 
@@ -26,6 +30,101 @@ class Donghub : MainAPI() {
         "Sec-Fetch-Site" to "cross-site",
         "Sec-Fetch-User" to "?1"
     )
+
+    // ==== Cloudflare bypass ====
+    // donghub.vip serves the root (and some cached pages) but puts a managed
+    // challenge ("Just a moment", 403) on every subpage. The challenge document
+    // has no eplister/player/Type: fields, so load() used to fall through to
+    // TvType.Movie and every series showed up as a movie. Same fix as Animexin:
+    // solve the challenge in a WebView and either capture the rendered HTML
+    // straight out of it (primary, immune to okhttp TLS fingerprinting) or
+    // replay with cf_clearance + WebView user agent. android.webkit is only
+    // touched via reflection so the JVM (cross-platform) build stays happy.
+
+    private fun cfClearanceCookie(url: String): String? = try {
+        val manager = Class.forName("android.webkit.CookieManager")
+            .getMethod("getInstance").invoke(null)
+        val cookie = manager.javaClass
+            .getMethod("getCookie", String::class.java).invoke(manager, url) as? String
+        cookie?.split(";")
+            ?.mapNotNull { part ->
+                val split = part.trim().split("=", limit = 2)
+                if (split.size == 2) split[0] to split[1] else null
+            }
+            ?.firstOrNull { it.first == "cf_clearance" }?.second
+    } catch (_: Throwable) {
+        null
+    }
+
+    private val pageMarkers = listOf(
+        "listupd", "entry-title", "eplister", "mobius", "bsx", "egghead", "synp"
+    )
+
+    private fun looksLikeChallenge(html: String): Boolean =
+        html.contains("challenges.cloudflare.com", ignoreCase = true) ||
+                html.contains("Just a moment", ignoreCase = true)
+
+    private fun looksLikeContentPage(html: String): Boolean =
+        pageMarkers.any { html.contains(it, ignoreCase = true) }
+
+    private suspend fun solveCloudflareAndCapture(url: String): String? {
+        val htmlRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        return try {
+            cfSolveMutex.withLock {
+                Log.d(TAG, "Cloudflare challenge, opening WebView: $url")
+                WebViewResolver(
+                    interceptUrl = Regex(".^"),
+                    userAgent = null,
+                    useOkhttp = false,
+                    script = "document.documentElement.outerHTML;",
+                    scriptCallback = { result ->
+                        val decoded = AppUtils.tryParseJson<String>(result)
+                        if (decoded != null && decoded.length > 2000 &&
+                            !looksLikeChallenge(decoded) && looksLikeContentPage(decoded)
+                        ) htmlRef.set(decoded)
+                    },
+                    additionalUrls = listOf(Regex("."))
+                ).resolveUsingWebView(url) {
+                    cfClearanceCookie(url) != null &&
+                            htmlRef.get()?.trimEnd()?.endsWith("</html>") == true
+                }
+            }
+            htmlRef.get()?.takeIf { !looksLikeChallenge(it) && looksLikeContentPage(it) }
+        } catch (e: Throwable) {
+            Log.w(TAG, "WebView cloudflare solve failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun isChallengeResponse(code: Int, server: String?): Boolean {
+        if (code != 403 && code != 503) return false
+        return server?.contains("cloudflare", ignoreCase = true) == true
+    }
+
+    private fun requestHeaders(url: String): Map<String, String> {
+        val headers = baseHeaders.toMutableMap()
+        val clearance = cfClearanceCookie(url) ?: return headers
+        // cf_clearance is bound to the WebView UA. Overwrite the SAME key —
+        // adding a differently-cased "user-agent" would send two UA headers
+        // and Cloudflare rejects the clearance on mismatch.
+        WebViewResolver.webViewUserAgent?.let { headers["User-Agent"] = it }
+        headers["Cookie"] = "cf_clearance=$clearance"
+        return headers
+    }
+
+    private suspend fun getDocument(url: String): Document {
+        var res = app.get(url, headers = requestHeaders(url))
+        if (isChallengeResponse(res.code, res.headers["server"])) {
+            val webHtml = solveCloudflareAndCapture(res.url)
+            if (webHtml != null) return Jsoup.parse(webHtml)
+
+            res = app.get(url, headers = requestHeaders(url))
+            if (isChallengeResponse(res.code, res.headers["server"])) {
+                throw ErrorLoadingException("Cloudflare challenge tidak terpecahkan untuk $url")
+            }
+        }
+        return res.document
+    }
 
     override var lang = "id"
     override val hasDownloadSupport = true
@@ -75,7 +174,7 @@ class Donghub : MainAPI() {
                 list = HomePageList(name = request.name, list = emptyList(), isHorizontalImages = false),
                 hasNext = false
             )
-            val document = app.get(mainUrl, headers = baseHeaders).document
+            val document = getDocument(mainUrl)
             val items = document.select("div.popconslide article").mapNotNull { it.toSearchResult() }
             return newHomePageResponse(
                 list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
@@ -89,7 +188,7 @@ class Donghub : MainAPI() {
             else -> "$mainUrl/${request.data}&page=$page"
         }
 
-        val document = app.get(url, headers = baseHeaders).document
+        val document = getDocument(url)
 
         val items = if (request.data.isEmpty()) {
             val latestSection = document.select("div.bixbox").firstOrNull { box ->
@@ -109,13 +208,13 @@ class Donghub : MainAPI() {
         )
     }
 
-    private suspend fun loadSeriesViaEpisode(episodeUrl: String): Pair<String, org.jsoup.nodes.Document> {
-        val firstDoc = app.get(episodeUrl, headers = baseHeaders).document
+    private suspend fun loadSeriesViaEpisode(episodeUrl: String): Pair<String, Document> {
+        val firstDoc = getDocument(episodeUrl)
         val allEpsLink = firstDoc
             .selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
         return if (allEpsLink != null) {
             val seriesUrl = fixUrl(allEpsLink)
-            seriesUrl to app.get(seriesUrl, headers = baseHeaders).document
+            seriesUrl to getDocument(seriesUrl)
         } else {
             episodeUrl to firstDoc
         }
@@ -282,7 +381,7 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", headers = baseHeaders).document
+        val document = getDocument("$mainUrl/?s=$query")
         return document.select("div.listupd article").mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
@@ -302,8 +401,13 @@ class Donghub : MainAPI() {
         val document: org.jsoup.nodes.Document
 
         if (derivedSeriesUrl != null) {
-            val derivedDoc = app.get(derivedSeriesUrl, headers = baseHeaders).document
-            if (derivedDoc.selectFirst("div.eplister, div.bixbox.synp") != null) {
+            val derivedDoc = try {
+                getDocument(derivedSeriesUrl)
+            } catch (e: Throwable) {
+                Log.w(TAG, "Derived series page failed, falling back: ${e.message}")
+                null
+            }
+            if (derivedDoc != null && derivedDoc.selectFirst("div.eplister, div.bixbox.synp") != null) {
                 seriesUrl = derivedSeriesUrl
                 document  = derivedDoc
             } else {
@@ -361,11 +465,18 @@ class Donghub : MainAPI() {
         val episodeList = document.select("div.eplister ul li")
         val hasPlayer = extractDirectIframe(document) != null
         val isSeries  = episodeList.isNotEmpty()
+        // The old `else -> TvType.Movie` fallback mislabeled every series as a
+        // movie whenever the page could not be identified (e.g. a Cloudflare
+        // challenge document). Only classify as Movie when there is actual
+        // evidence, otherwise fail loudly so the challenge gets retried/surfaced.
+        val looksLikeMovie = typeRaw.contains("movie", ignoreCase = true) ||
+                (!isSeries && !hasPlayer && url.contains("movie", ignoreCase = true))
         val tvType = when {
-            typeRaw.isNotBlank() ->
-                if (typeRaw.contains("movie", ignoreCase = true)) TvType.Movie else TvType.Anime
-            isSeries || hasPlayer -> TvType.Anime
-            else -> TvType.Movie
+            looksLikeMovie -> TvType.Movie
+            typeRaw.isNotBlank() || isSeries || hasPlayer -> TvType.Anime
+            else -> throw ErrorLoadingException(
+                "Tidak dapat mengidentifikasi halaman: $seriesUrl"
+            )
         }
 
         val episodes = if (isSeries) {
@@ -456,7 +567,7 @@ class Donghub : MainAPI() {
     ): Boolean {
         Log.i(TAG, "=== loadLinks called === URL: $data")
 
-        val document = app.get(data, headers = baseHeaders).document
+        val document = getDocument(data)
 
         val sources = mutableListOf<Pair<String, String>>()
 
@@ -500,5 +611,6 @@ class Donghub : MainAPI() {
 
     companion object {
         private const val TAG = "Donghub"
+        private val cfSolveMutex = Mutex()
     }
 }
