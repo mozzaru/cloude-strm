@@ -53,11 +53,3 @@ class FileMoonSx : Filesim() {
     override val mainUrl = "https://filemoon.sx"
     override val name = "FileMoonSx"
 }
-
-fun Http(url: String): String {
-    return if (url.startsWith("//")) {
-        "https:$url"
-    } else {
-        url
-    }
-}
