@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class Animexin : MainAPI() {
     override var mainUrl              = "https://animexin.dev"
@@ -35,7 +36,7 @@ class Animexin : MainAPI() {
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
         "Sec-Fetch-Dest" to "document",
         "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "same-origin",
+        "Sec-Fetch-Site" to "none",
         "Upgrade-Insecure-Requests" to "1",
     )
 
@@ -48,10 +49,12 @@ class Animexin : MainAPI() {
     // animexin.dev serves the root from cache but puts a managed challenge
     // (`cf-mitigated: challenge`, 403) on every subpage. CloudStream's app-level
     // CloudflareKiller is not part of the extension API, so we replicate it:
-    // solve the challenge in a WebView (same as the browser auto-verify), read
-    // cf_clearance from CookieManager and replay with the WebView user agent.
-    // android.webkit is only touched via reflection so the JVM (cross-platform)
-    // build stays happy; there it degrades to a plain request.
+    // solve the challenge in a WebView (same as the browser auto-verify) and
+    // either capture the rendered HTML straight out of the WebView (primary,
+    // immune to okhttp TLS fingerprinting) or replay with cf_clearance +
+    // WebView user agent. android.webkit is only touched via reflection so the
+    // JVM (cross-platform) build stays happy; there it degrades to a plain
+    // request that fails openly instead of hanging.
 
     private fun cfClearanceCookie(url: String): String? = try {
         val manager = Class.forName("android.webkit.CookieManager")
@@ -68,20 +71,48 @@ class Animexin : MainAPI() {
         null
     }
 
-    private suspend fun solveCloudflare(url: String) = cfSolveMutex.withLock {
-        if (cfClearanceCookie(url) != null) return@withLock
-        Log.d(TAG, "Cloudflare challenge detected, opening WebView: $url")
-        try {
-            WebViewResolver(
-                interceptUrl = Regex(".^"),
-                userAgent = null,
-                useOkhttp = false,
-                additionalUrls = listOf(Regex("."))
-            ).resolveUsingWebView(url) {
-                cfClearanceCookie(url) != null
+    private val pageMarkers = listOf("listupd", "entry-title", "eplister", "mobius", "class=\"bsx\"")
+
+    private fun looksLikeChallenge(html: String): Boolean =
+        html.contains("challenges.cloudflare.com", ignoreCase = true) ||
+                html.contains("Just a moment", ignoreCase = true)
+
+    private fun looksLikeContentPage(html: String): Boolean =
+        pageMarkers.any { html.contains(it, ignoreCase = true) }
+
+    /**
+     * Loads [url] in a WebView until the Cloudflare challenge has been solved
+     * AND the real page HTML has been captured, then returns the HTML (or null
+     * on failure/timeout so the caller can fall back to a cookie replay).
+     */
+    private suspend fun solveCloudflareAndCapture(url: String): String? {
+        val htmlRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        return try {
+            cfSolveMutex.withLock {
+                Log.d(TAG, "Cloudflare challenge, opening WebView: $url")
+                WebViewResolver(
+                    interceptUrl = Regex(".^"),
+                    userAgent = null,
+                    useOkhttp = false,
+                    script = "document.documentElement.outerHTML;",
+                    scriptCallback = { result ->
+                        val decoded = AppUtils.tryParseJson<String>(result)
+                        if (decoded != null && decoded.length > 2000 &&
+                            !looksLikeChallenge(decoded) && looksLikeContentPage(decoded)
+                        ) htmlRef.set(decoded)
+                    },
+                    additionalUrls = listOf(Regex("."))
+                ).resolveUsingWebView(url) {
+                    // Exit only once the challenge is solved AND the DOM is fully
+                    // rendered (a complete document always ends with </html>).
+                    cfClearanceCookie(url) != null &&
+                            htmlRef.get()?.trimEnd()?.endsWith("</html>") == true
+                }
             }
+            htmlRef.get()?.takeIf { !looksLikeChallenge(it) && looksLikeContentPage(it) }
         } catch (e: Throwable) {
             Log.w(TAG, "WebView cloudflare solve failed: ${e.message}")
+            null
         }
     }
 
@@ -90,18 +121,24 @@ class Animexin : MainAPI() {
         return server?.contains("cloudflare", ignoreCase = true) == true
     }
 
-    private fun cloudflareHeaders(url: String): Map<String, String> {
-        val clearance = cfClearanceCookie(url) ?: return emptyMap()
-        val headers = mutableMapOf("Cookie" to "cf_clearance=$clearance")
-        WebViewResolver.webViewUserAgent?.let { headers["user-agent"] = it }
+    private fun requestHeaders(url: String): Map<String, String> {
+        val headers = browserHeaders.toMutableMap()
+        val clearance = cfClearanceCookie(url) ?: return headers
+        // cf_clearance is bound to the WebView UA. Overwrite the SAME key —
+        // adding a differently-cased "user-agent" would send two UA headers
+        // and Cloudflare rejects the clearance on mismatch.
+        WebViewResolver.webViewUserAgent?.let { headers["User-Agent"] = it }
+        headers["Cookie"] = "cf_clearance=$clearance"
         return headers
     }
 
     private suspend fun getDocument(url: String): Document {
-        var res = app.get(url, headers = browserHeaders + cloudflareHeaders(url))
+        var res = app.get(url, headers = requestHeaders(url))
         if (isChallengeResponse(res.code, res.headers["server"])) {
-            solveCloudflare(res.url)
-            res = app.get(url, headers = browserHeaders + cloudflareHeaders(url))
+            val webHtml = solveCloudflareAndCapture(res.url)
+            if (webHtml != null) return Jsoup.parse(webHtml)
+
+            res = app.get(url, headers = requestHeaders(url))
             if (isChallengeResponse(res.code, res.headers["server"])) {
                 throw ErrorLoadingException("Cloudflare challenge tidak terpecahkan untuk $url")
             }
@@ -161,7 +198,7 @@ class Animexin : MainAPI() {
     // ==== Search ====
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        val encoded = query.trim().replace(" ", "+")
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
         val url = if (page == 1) "$mainUrl/?s=$encoded"
         else "$mainUrl/page/$page/?s=$encoded"
         val document = getDocument(url)
@@ -172,8 +209,19 @@ class Animexin : MainAPI() {
 
     // ==== Load ====
 
+    // Listing items are series pages, but search (and old bookmarks) can hand us
+    // episode posts like "...-episode-98-indonesia-english-sub/". Episode pages
+    // have no eplister, so resolve them to their series page first.
+    private fun toSeriesUrl(url: String): String {
+        if (!url.contains("-episode-") && !url.contains("-subtitle-indonesia")) return url
+        return url
+            .replace(Regex("-episode-[^/]+/?$"), "/")
+            .replace(Regex("-subtitle-indonesia/?$"), "/")
+    }
+
     override suspend fun load(url: String): LoadResponse {
-        val document = getDocument(url)
+        val seriesUrl = toSeriesUrl(url)
+        val document = getDocument(seriesUrl)
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
         val poster = document.selectFirst("div.thumb img")?.attr("src")
             ?.ifBlank { null }
@@ -192,7 +240,7 @@ class Animexin : MainAPI() {
             // the .mobius servers. Pass that page to loadLinks().
             val watchUrl = episodeItems.first()?.selectFirst("a")?.attr("href")
                 ?.takeIf { it.isNotBlank() } ?: url
-            return newMovieLoadResponse(title, url, TvType.Movie, fixUrl(watchUrl)) {
+            return newMovieLoadResponse(title, seriesUrl, TvType.Movie, fixUrl(watchUrl)) {
                 this.posterUrl = poster
                 this.plot = description
             }
@@ -217,7 +265,7 @@ class Animexin : MainAPI() {
             }
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.reversed()) {
+        return newTvSeriesLoadResponse(title, seriesUrl, TvType.Anime, episodes.reversed()) {
             this.posterUrl = poster
             this.plot = description
         }
