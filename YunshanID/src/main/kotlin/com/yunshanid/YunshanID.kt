@@ -82,7 +82,7 @@ class YunshanID : MainAPI() {
         val doc = Jsoup.parse(html)
 
         val donghua = astroIsland(html, "SynopsisActions")
-            ?.map("donghua")
+            ?.nested("donghua")
             ?: throw ErrorLoadingException("donghua island not found")
 
         val title   = donghua.str("title")
@@ -176,19 +176,21 @@ class YunshanID : MainAPI() {
         val viewCount: Int = 0,
         val status: String? = null,
         val type: String? = null
-    ) {
-        fun toSearchResponse(): SearchResponse {
-            val tvType = if (type?.contains("Movie", ignoreCase = true) == true)
-                TvType.Movie else TvType.Anime
-            val tag = when (status) {
-                "Completed" -> " (Completed)"
-                "On-Going"  -> " (Ongoing)"
-                else        -> ""
-            }
-            return newAnimeSearchResponse("$title$tag", "$mainUrl/synopsis/$id", tvType) {
-                this.posterUrl = this@Card.poster
-                addSub(latestEp)
-            }
+    )
+
+    private fun Card.toSearchResponse(): SearchResponse {
+        val tvType = if (type?.contains("Movie", ignoreCase = true) == true)
+            TvType.Movie else TvType.Anime
+        val tag = when (status) {
+            "Completed" -> " (Completed)"
+            "On-Going"  -> " (Ongoing)"
+            else        -> ""
+        }
+        val posterValue = poster
+        val latestValue = latestEp
+        return newAnimeSearchResponse("$title$tag", "$mainUrl/synopsis/$id", tvType) {
+            this.posterUrl = posterValue
+            addSub(latestValue)
         }
     }
 
@@ -200,7 +202,7 @@ class YunshanID : MainAPI() {
         for (island in islandTags(html, "HomeGrid")) {
             val props = decodeProps(island) ?: continue
             val root  = astroValue(props) as? Map<String, Any?> ?: continue
-            val items = root.rawItems("items")
+            val items = root.list("items")
             out += items.mapNotNull { item ->
                 val id = item.int("id").takeIf { it > 0 } ?: return@mapNotNull null
                 Card(
@@ -253,7 +255,7 @@ class YunshanID : MainAPI() {
     private suspend fun synopsisOf(id: Int): Card? {
         return try {
             val html = get("$mainUrl/synopsis/$id")
-            val donghua = astroIsland(html, "SynopsisActions")?.map("donghua")
+            val donghua = astroIsland(html, "SynopsisActions")?.nested("donghua")
                 ?: return null
             val epCount = astroIsland(html, "EpisodeGrid")?.list("episodes")?.size ?: 0
             Card(
@@ -423,18 +425,18 @@ class YunshanID : MainAPI() {
             return text.toIntOrNull() ?: text.toDoubleOrNull() ?: text
         }
     }
-
-    // ---- typed accessors over Any? maps/lists ----
-    private fun Any?.map(): Map<String, Any?>? = this as? Map<String, Any?>
-    private fun Map<String, Any?>.str(key: String): String = this[key] as? String ?: ""
-    private fun Map<String, Any?>.int(key: String): Int = when (val v = this[key]) {
-        is Int    -> v
-        is Long   -> v.toInt()
-        is Double -> v.toInt()
-        is String -> v.toIntOrNull() ?: 0
-        else      -> 0
-    }
-    private fun Map<String, Any?>.list(key: String): List<Map<String, Any?>> =
-        (this[key] as? List<*>)?.mapNotNull { it.map() } ?: emptyList()
-    private fun Map<String, Any?>.rawItems(key: String): List<Map<String, Any?>> = list(key)
 }
+
+// ---- typed accessors over Any? maps/lists ----
+private fun Any?.asMap(): Map<String, Any?>? = this as? Map<String, Any?>
+private fun Map<String, Any?>.str(key: String): String = this[key] as? String ?: ""
+private fun Map<String, Any?>.int(key: String): Int = when (val v = this[key]) {
+    is Int    -> v
+    is Long   -> v.toInt()
+    is Double -> v.toInt()
+    is String -> v.toIntOrNull() ?: 0
+    else      -> 0
+}
+private fun Map<String, Any?>.list(key: String): List<Map<String, Any?>> =
+    (this[key] as? List<*>)?.mapNotNull { it.asMap() } ?: emptyList()
+private fun Map<String, Any?>.nested(key: String): Map<String, Any?>? = this[key]?.asMap()
