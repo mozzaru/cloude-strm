@@ -10,5 +10,6 @@ class YunshanIDProvider : BasePlugin() {
     override fun load() {
         registerMainAPI(YunshanID())
         registerExtractorAPI(GdriveExtractor())
+        registerExtractorAPI(StreamRuby())
     }
 }
