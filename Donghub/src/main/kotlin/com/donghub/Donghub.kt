@@ -268,27 +268,36 @@ class Donghub : MainAPI() {
 
         el.select("h1, h2, h3, h4, p").forEach { child ->
             val t = child.text().trim()
+            val tag = child.tagName()
+            val cls = child.className().lowercase()
+
+            val isReleasesHeading = cls.contains("releases") && t.length <= 60
+            val looksLikeHeading = tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" || isReleasesHeading
+
             when {
-                child.tagName() == "p" && isLangMarker(t) ->
+                tag == "p" && isLangMarker(t) ->
                     current = if (t.lowercase().contains("indo")) "indo" else "eng"
 
-                child.tagName() == "h1" || child.tagName() == "h2" ||
-                    child.tagName() == "h3" || child.tagName() == "h4" -> {
+                looksLikeHeading -> {
                     val heading = t.lowercase()
                     when {
-                        heading.contains("indo") -> current = "indo"
-                        heading.contains("eng")  -> current = "eng"
+                        heading.contains("indo") || heading.contains("indonesia") -> current = "indo"
+                        heading.contains("english") || heading.contains(" eng") ||
+                            heading.endsWith(" eng") || heading == "eng" -> current = "eng"
                     }
                 }
 
                 else -> {
-                    if (t.isBlank() || isKeywordJunk(t)) return@forEach
+                    if (t.isBlank() || isKeywordJunk(t) || isGenericTemplate(t)) return@forEach
                     if (current == "indo") indo.add(t) else eng.add(t)
                 }
             }
         }
 
-        return (if (indo.isNotEmpty()) indo else eng).joinToString("\n\n").trim()
+        if (indo.isEmpty() && eng.isEmpty()) return ""
+        val pickIndo = indo.size >= eng.size && indo.isNotEmpty()
+        val source = if (pickIndo) indo else eng
+        return source.joinToString("\n\n").trim()
     }
 
     private fun cleanEpisodeTitle(rawTitle: String, seriesTitle: String, epNum: Int?): String {
