@@ -45,16 +45,24 @@ class Animexin : MainAPI() {
         private val cfSolveMutex = Mutex()
     }
 
-    // ==== Cloudflare bypass ====
-    // animexin.dev serves the root from cache but puts a managed challenge
-    // (`cf-mitigated: challenge`, 403) on every subpage. CloudStream's app-level
-    // CloudflareKiller is not part of the extension API, so we replicate it:
-    // solve the challenge in a WebView (same as the browser auto-verify) and
-    // either capture the rendered HTML straight out of the WebView (primary,
-    // immune to okhttp TLS fingerprinting) or replay with cf_clearance +
-    // WebView user agent. android.webkit is only touched via reflection so the
-    // JVM (cross-platform) build stays happy; there it degrades to a plain
-    // request that fails openly instead of hanging.
+    // ==== Cloudflare ====
+    // Only the /anime/ listing pages sit behind a Cloudflare managed challenge
+    // (`cf-mitigated: challenge`, 403); detail, episode and search pages are
+    // served freely.
+    //
+    // CloudStream's app-level `CloudflareKiller` (network/CloudflareKiller.kt)
+    // is NOT attached to the OkHttp client behind `app.get()`, so a challenged
+    // request does NOT auto-solve. We therefore solve it ourselves: open a
+    // WebView (same as a real browser — which is why the site shows no
+    // Cloudflare there), let it pass the managed challenge, then replay with the
+    // resulting `cf_clearance` + the matching WebView user agent.
+    //
+    // We deliberately do NOT scrape the rendered DOM out of the WebView — that
+    // half-rendered snapshot was what dropped the posters (thumbnails). Posters
+    // are always parsed from a clean `app.get` response instead.
+    //
+    // android.webkit is only touched via reflection so the JVM (cross-platform)
+    // build stays happy and simply falls back to a plain request.
 
     private fun cfClearanceCookie(url: String): String? = try {
         val manager = Class.forName("android.webkit.CookieManager")
@@ -71,55 +79,8 @@ class Animexin : MainAPI() {
         null
     }
 
-    private val pageMarkers = listOf("listupd", "entry-title", "eplister", "mobius", "class=\"bsx\"")
-
-    private fun looksLikeChallenge(html: String): Boolean =
-        html.contains("challenges.cloudflare.com", ignoreCase = true) ||
-                html.contains("Just a moment", ignoreCase = true)
-
-    private fun looksLikeContentPage(html: String): Boolean =
-        pageMarkers.any { html.contains(it, ignoreCase = true) }
-
-    /**
-     * Loads [url] in a WebView until the Cloudflare challenge has been solved
-     * AND the real page HTML has been captured, then returns the HTML (or null
-     * on failure/timeout so the caller can fall back to a cookie replay).
-     */
-    private suspend fun solveCloudflareAndCapture(url: String): String? {
-        val htmlRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
-        return try {
-            cfSolveMutex.withLock {
-                Log.d(TAG, "Cloudflare challenge, opening WebView: $url")
-                WebViewResolver(
-                    interceptUrl = Regex(".^"),
-                    userAgent = null,
-                    useOkhttp = false,
-                    script = "document.documentElement.outerHTML;",
-                    scriptCallback = { result ->
-                        val decoded = AppUtils.tryParseJson<String>(result)
-                        if (decoded != null && decoded.length > 2000 &&
-                            !looksLikeChallenge(decoded) && looksLikeContentPage(decoded)
-                        ) htmlRef.set(decoded)
-                    },
-                    additionalUrls = listOf(Regex("."))
-                ).resolveUsingWebView(url) {
-                    // Exit only once the challenge is solved AND the DOM is fully
-                    // rendered (a complete document always ends with </html>).
-                    cfClearanceCookie(url) != null &&
-                            htmlRef.get()?.trimEnd()?.endsWith("</html>") == true
-                }
-            }
-            htmlRef.get()?.takeIf { !looksLikeChallenge(it) && looksLikeContentPage(it) }
-        } catch (e: Throwable) {
-            Log.w(TAG, "WebView cloudflare solve failed: ${e.message}")
-            null
-        }
-    }
-
-    private fun isChallengeResponse(code: Int, server: String?): Boolean {
-        if (code != 403 && code != 503) return false
-        return server?.contains("cloudflare", ignoreCase = true) == true
-    }
+    private fun isChallengeResponse(code: Int, server: String?): Boolean =
+        (code == 403 || code == 503) && server?.contains("cloudflare", ignoreCase = true) == true
 
     private fun requestHeaders(url: String): Map<String, String> {
         val headers = browserHeaders.toMutableMap()
@@ -132,15 +93,30 @@ class Animexin : MainAPI() {
         return headers
     }
 
+    private suspend fun solveCloudflare(url: String) = cfSolveMutex.withLock {
+        if (cfClearanceCookie(url) != null) return@withLock
+        Log.d(TAG, "Cloudflare challenge, membuka WebView: $url")
+        try {
+            WebViewResolver(
+                interceptUrl = Regex(".^"),
+                userAgent = null,
+                useOkhttp = false,
+                additionalUrls = listOf(Regex("."))
+            ).resolveUsingWebView(url) {
+                cfClearanceCookie(url) != null
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "WebView cloudflare solve gagal: ${e.message}")
+        }
+    }
+
     private suspend fun getDocument(url: String): Document {
         var res = app.get(url, headers = requestHeaders(url))
         if (isChallengeResponse(res.code, res.headers["server"])) {
-            val webHtml = solveCloudflareAndCapture(res.url)
-            if (webHtml != null) return Jsoup.parse(webHtml)
-
+            solveCloudflare(res.url)
             res = app.get(url, headers = requestHeaders(url))
             if (isChallengeResponse(res.code, res.headers["server"])) {
-                throw ErrorLoadingException("Cloudflare challenge tidak terpecahkan untuk $url")
+                throw ErrorLoadingException("Blokir Cloudflare: buka animexin.dev di browser lalu coba lagi. ($url)")
             }
         }
         return res.document
@@ -183,9 +159,17 @@ class Animexin : MainAPI() {
 
     private fun extractPoster(aTag: Element): String? {
         val img = aTag.selectFirst("img") ?: return null
-        val raw = img.attr("src").ifBlank { img.attr("data-src") }
-        if (raw.isBlank()) return null
-        return fixUrlNull(raw)
+        val raw = sequenceOf(
+            img.attr("src"),
+            img.attr("data-src"),
+            img.attr("data-lazy-src"),
+            img.attr("data-original"),
+            img.attr("data-lazy"),
+        ).firstOrNull { it.isNotBlank() } ?: return null
+        // The theme ships resized "-768x1077" copies next to the full-size
+        // image; stripping the size keeps the original full-quality poster.
+        val fixed = fixUrlNull(raw) ?: return null
+        return fixed.replace(Regex("(?:-\\d{2,4}x\\d{2,4})?(\\.[a-z0-9]+)$", RegexOption.IGNORE_CASE), "$1")
     }
 
     private fun hasNextPage(doc: Document): Boolean {
@@ -223,8 +207,14 @@ class Animexin : MainAPI() {
         val seriesUrl = toSeriesUrl(url)
         val document = getDocument(seriesUrl)
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
-        val poster = document.selectFirst("div.thumb img")?.attr("src")
-            ?.ifBlank { null }
+        val poster = document.selectFirst("div.thumb img")?.let { img ->
+            sequenceOf(
+                img.attr("src"),
+                img.attr("data-src"),
+                img.attr("data-lazy-src"),
+                img.attr("data-original"),
+            ).firstOrNull { it.isNotBlank() }
+        }?.let(::fixUrlNull)
             ?: document.selectFirst("meta[property=og:image]")?.attr("content")
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
         val speText = document.selectFirst(".spe")?.text().orEmpty()
