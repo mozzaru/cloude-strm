@@ -83,6 +83,14 @@ class Animexin : MainAPI() {
     private fun looksLikeContentPage(html: String): Boolean =
         listOf("listupd", "entry-title", "eplister", "bsx").any { html.contains(it, ignoreCase = true) }
 
+    // animexin.dev serves its poster images (wp-content/uploads/*) behind
+    // Cloudflare "hotlink protection": a request without a matching Referer
+    // gets 403. Coil loads posters with no Referer by default, so we attach the
+    // header here; it flows into the Coil request via `posterHeaders` and the
+    // image then fetches fine (verified live across jpg/png/webp, 2026-09).
+    private fun posterHeaders(): Map<String, String> =
+        mapOf("Referer" to "$mainUrl/")
+
     private fun requestHeaders(url: String): Map<String, String> {
         val headers = browserHeaders.toMutableMap()
         val clearance = cfClearanceCookie(url) ?: return headers
@@ -169,6 +177,7 @@ class Animexin : MainAPI() {
 
         return newAnimeSearchResponse(title, href, tvType) {
             this.posterUrl = poster
+            this.posterHeaders = posterHeaders()
             addDubStatus(DubStatus.Subbed, epNum)
         }
     }
@@ -248,6 +257,7 @@ class Animexin : MainAPI() {
                 ?.takeIf { it.isNotBlank() } ?: url
             return newMovieLoadResponse(title, seriesUrl, TvType.Movie, fixUrl(watchUrl)) {
                 this.posterUrl = poster
+                this.posterHeaders = posterHeaders()
                 this.plot = description
             }
         }
@@ -273,6 +283,7 @@ class Animexin : MainAPI() {
 
         return newTvSeriesLoadResponse(title, seriesUrl, TvType.Anime, episodes.reversed()) {
             this.posterUrl = poster
+            this.posterHeaders = posterHeaders()
             this.plot = description
         }
     }
