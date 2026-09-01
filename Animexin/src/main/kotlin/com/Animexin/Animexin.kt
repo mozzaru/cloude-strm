@@ -47,22 +47,20 @@ class Animexin : MainAPI() {
 
     // ==== Cloudflare ====
     // Only the /anime/ listing pages sit behind a Cloudflare managed challenge
-    // (`cf-mitigated: challenge`, 403); detail, episode and search pages are
-    // served freely.
+    // (`cf-mitigated: challenge`, 403): they pass silently in a real browser
+    // (no user verification — which is why the site "has no Cloudflare" there),
+    // but okhttp (`app.get`) gets 403 because Cloudflare fingerprints the TLS
+    // stack, NOT just the User-Agent/cookies. So even replaying `cf_clearance`
+    // obtained from a WebView over okhttp fails.
     //
-    // CloudStream's app-level `CloudflareKiller` (network/CloudflareKiller.kt)
-    // is NOT attached to the OkHttp client behind `app.get()`, so a challenged
-    // request does NOT auto-solve. We therefore solve it ourselves: open a
-    // WebView (same as a real browser — which is why the site shows no
-    // Cloudflare there), let it pass the managed challenge, then replay with the
-    // resulting `cf_clearance` + the matching WebView user agent.
+    // The only reliable way to read the challenged page is therefore the
+    // browser context itself: open a WebView, let the challenge auto-pass, then
+    // capture the fully-rendered `outerHTML` and parse that (same as a browser).
+    // We keep the okhttp replay only as a cheap first attempt that usually
+    // succeeds once a clearance already exists for the domain.
     //
-    // We deliberately do NOT scrape the rendered DOM out of the WebView — that
-    // half-rendered snapshot was what dropped the posters (thumbnails). Posters
-    // are always parsed from a clean `app.get` response instead.
-    //
-    // android.webkit is only touched via reflection so the JVM (cross-platform)
-    // build stays happy and simply falls back to a plain request.
+    // android.webkit / JS is only touched via reflection in the cookie helper so
+    // the JVM (cross-platform) build stays happy and simply does the plain GET.
 
     private fun cfClearanceCookie(url: String): String? = try {
         val manager = Class.forName("android.webkit.CookieManager")
@@ -82,6 +80,9 @@ class Animexin : MainAPI() {
     private fun isChallengeResponse(code: Int, server: String?): Boolean =
         (code == 403 || code == 503) && server?.contains("cloudflare", ignoreCase = true) == true
 
+    private fun looksLikeContentPage(html: String): Boolean =
+        listOf("listupd", "entry-title", "eplister", "bsx").any { html.contains(it, ignoreCase = true) }
+
     private fun requestHeaders(url: String): Map<String, String> {
         val headers = browserHeaders.toMutableMap()
         val clearance = cfClearanceCookie(url) ?: return headers
@@ -93,33 +94,48 @@ class Animexin : MainAPI() {
         return headers
     }
 
-    private suspend fun solveCloudflare(url: String) = cfSolveMutex.withLock {
-        if (cfClearanceCookie(url) != null) return@withLock
-        Log.d(TAG, "Cloudflare challenge, membuka WebView: $url")
-        try {
-            WebViewResolver(
-                interceptUrl = Regex(".^"),
-                userAgent = null,
-                useOkhttp = false,
-                additionalUrls = listOf(Regex("."))
-            ).resolveUsingWebView(url) {
-                cfClearanceCookie(url) != null
+    /**
+     * Opens [url] in a WebView (the challenge auto-passes silently) and returns
+     * the fully-rendered page HTML from the browser context. This bypasses the
+     * TLS fingerprint check that makes an okhttp replay fail. Returns null if
+     * the DOM was never fully captured (timeout / JVM build).
+     */
+    private suspend fun solveAndCapture(url: String): String? {
+        val htmlRef = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        return try {
+            cfSolveMutex.withLock {
+                Log.d(TAG, "Cloudflare challenge, menangkap lewat WebView: $url")
+                WebViewResolver(
+                    interceptUrl = Regex(".^"),
+                    userAgent = null,
+                    useOkhttp = false,
+                    script = "document.documentElement.outerHTML;",
+                    scriptCallback = { result ->
+                        val decoded = AppUtils.tryParseJson<String>(result)
+                        if (decoded != null && decoded.length > 1000 &&
+                            decoded.trimEnd().endsWith("</html>") && looksLikeContentPage(decoded)
+                        ) htmlRef.set(decoded)
+                    },
+                    additionalUrls = listOf(Regex("."))
+                ).resolveUsingWebView(url) {
+                    htmlRef.get() != null
+                }
             }
+            htmlRef.get()?.takeIf { it.trimEnd().endsWith("</html>") }
         } catch (e: Throwable) {
-            Log.w(TAG, "WebView cloudflare solve gagal: ${e.message}")
+            Log.w(TAG, "WebView capture gagal: ${e.message}")
+            null
         }
     }
 
     private suspend fun getDocument(url: String): Document {
-        var res = app.get(url, headers = requestHeaders(url))
-        if (isChallengeResponse(res.code, res.headers["server"])) {
-            solveCloudflare(res.url)
-            res = app.get(url, headers = requestHeaders(url))
-            if (isChallengeResponse(res.code, res.headers["server"])) {
-                throw ErrorLoadingException("Blokir Cloudflare: buka animexin.dev di browser lalu coba lagi. ($url)")
-            }
-        }
-        return res.document
+        val res = app.get(url, headers = requestHeaders(url))
+        if (!isChallengeResponse(res.code, res.headers["server"])) return res.document
+
+        // okhttp is TLS-fingerprinted, so fall back to the WebView browser context.
+        val html = solveAndCapture(res.url)
+            ?: throw ErrorLoadingException("Blokir Cloudflare: tidak bisa memuat animexin.dev (bukanya di browser). $url")
+        return Jsoup.parse(html)
     }
 
     // ==== Main page ====
