@@ -101,6 +101,9 @@ class Donghub : MainAPI() {
         return server?.contains("cloudflare", ignoreCase = true) == true
     }
 
+    private fun posterHeaders(): Map<String, String> =
+        mapOf("Referer" to "$mainUrl/")
+
     private fun requestHeaders(url: String): Map<String, String> {
         val headers = baseHeaders.toMutableMap()
         val clearance = cfClearanceCookie(url) ?: return headers
@@ -372,6 +375,7 @@ class Donghub : MainAPI() {
 
         return newAnimeSearchResponse("$rawTitle$statusSuffix", href, type) {
             this.posterUrl = posterUrl
+            this.posterHeaders = posterHeaders()
             when {
                 "sub" in subLabel -> addSub(epNum)
                 "dub" in subLabel -> addDub(epNum)
@@ -507,6 +511,7 @@ class Donghub : MainAPI() {
 
         return newTvSeriesLoadResponse(title, seriesUrl, tvType, episodes) {
             this.posterUrl  = poster
+            this.posterHeaders = posterHeaders()
             this.plot       = synopsis
             this.tags       = genres
             this.showStatus = showStatus
