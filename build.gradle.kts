@@ -65,14 +65,17 @@ subprojects {
         }
 
         compileOptions {
-            sourceCompatibility = JavaVersion.VERSION_1_8
-            targetCompatibility = JavaVersion.VERSION_1_8
+            // cloudstream3 pre-release compiles its inline functions (e.g. AppUtils)
+            // with JVM target 11; compiling against them with a lower target breaks
+            // bytecode inlining ("Cannot inline bytecode built with JVM target 11...").
+            sourceCompatibility = JavaVersion.VERSION_11
+            targetCompatibility = JavaVersion.VERSION_11
         }
 
         //noinspection WrongGradleMethod
         tasks.withType<KotlinJvmCompile> {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_1_8)
+                jvmTarget.set(JvmTarget.JVM_11)
                 freeCompilerArgs.addAll(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
