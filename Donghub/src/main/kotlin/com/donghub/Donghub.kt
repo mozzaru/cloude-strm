@@ -12,7 +12,7 @@ import org.jsoup.nodes.Element
 import java.util.Base64
 
 class Donghub : MainAPI() {
-    override var mainUrl = "https://donghub.vip"
+    override var mainUrl = "https://donghive.vip"
     override var name = "Donghub"
     override val hasMainPage = true
 
