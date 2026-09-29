@@ -36,7 +36,9 @@ class AnichinPlayer : ExtractorApi() {
         if (dmMatch != null) {
             val dmUrl = dmMatch.groupValues[1].replace("&amp;", "&")
             Log.d("AnichinPlayer", "Found Dailymotion: $dmUrl")
-            loadExtractor(dmUrl, subtitleCallback, callback)
+            // Same shadowing concern as ok.ru below: dispatch the self-contained local
+            // Dailymotion extractor instead of the global registration lookup.
+            Nunadrama().getUrl(dmUrl, referer, subtitleCallback, callback)
             return
         }
 
@@ -45,7 +47,10 @@ class AnichinPlayer : ExtractorApi() {
         if (okMatch != null) {
             val okUrl = okMatch.groupValues[1]
             Log.d("AnichinPlayer", "Found OkRu: $okUrl")
-            loadExtractor(okUrl, subtitleCallback, callback)
+            // Call the local fixed Odnoklassniki copy directly: loadExtractor() resolves by
+            // registration order, so a globally-registered copy could shadow it and fail on
+            // ok.ru's current `&quot;`-escaped JSON.
+            OkRuSSL().getUrl(okUrl, referer, subtitleCallback, callback)
             return
         }
 

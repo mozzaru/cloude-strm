@@ -45,7 +45,14 @@ open class Odnoklassniki : ExtractorApi() {
         )
         val embedUrl = url.replace("/video/","/videoembed/")
         Log.d("Odnoklassniki", "Fetching embed: $embedUrl")
-        val videoReq = app.get(embedUrl, headers=headers).text.replace("\\&quot;", "\"").replace("\\\\", "\\")
+        // ok.ru now escapes the inline JSON with plain `&quot;` entities (older pages used
+        // `\&quot;`), so both forms must be unescaped before matching `"videos"`. Verified
+        // against live videoembed pages 2026-09-29: without the `&quot;` pass the `"videos"`
+        // regex never matches and the extractor throws "Video not found".
+        val videoReq = app.get(embedUrl, headers=headers).text
+            .replace("\\&quot;", "\"")
+            .replace("&quot;", "\"")
+            .replace("\\\\", "\\")
             .replace(Regex("\\\\u([0-9A-Fa-f]{4})")) { matchResult ->
                 Integer.parseInt(matchResult.groupValues[1], 16).toChar().toString()
             }

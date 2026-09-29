@@ -543,6 +543,11 @@ class Anichin : MainAPI() {
      * Routes a resolved player URL to the right extractor. Most hosts are handled by the core
      * library or the bundled extractors via loadExtractor(); a few need the local bespoke
      * extractor called directly (or a default referer set).
+     *
+     * ok.ru and the nunadrama Dailymotion relay are dispatched directly on purpose:
+     * loadExtractor() resolves by registration order, so a globally-registered copy (the core
+     * Odnoklassniki extractor, or another plugin that registers ok.ru after this one) can win
+     * the lookup and fail on ok.ru's current `&quot;`-escaped JSON.
      */
     private suspend fun dispatchPlayer(
         url: String,
@@ -554,6 +559,14 @@ class Anichin : MainAPI() {
             url.contains("rpmvid.com") -> {
                 Log.d("AnichinLoadLinks", " -> RpmShare extractor")
                 RpmShare().getUrl(url, referer, subtitleCallback, callback)
+            }
+            url.contains("ok.ru/video") -> {
+                Log.d("AnichinLoadLinks", " -> local Odnoklassniki (ok.ru) extractor")
+                OkRuSSL().getUrl(url, referer, subtitleCallback, callback)
+            }
+            url.contains("nunadrama") || url.contains("dailymotion.com") -> {
+                Log.d("AnichinLoadLinks", " -> Nunadrama (Dailymotion) extractor")
+                Nunadrama().getUrl(url, referer, subtitleCallback, callback)
             }
             else -> {
                 Log.d("AnichinLoadLinks", " -> loadExtractor: $url")

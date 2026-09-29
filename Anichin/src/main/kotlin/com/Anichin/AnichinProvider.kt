@@ -21,5 +21,12 @@ class AnichinProvider: BasePlugin() {
         registerExtractorAPI(VidHide())
         registerExtractorAPI(Morencius())
         registerExtractorAPI(Dtube())
+        // Fixed local copy of the core OkRu extractor: ok.ru now escapes its inline JSON with
+        // plain `&quot;` (the core Odnoklassniki extractor only unescapes `\&quot;`), so this
+        // registered copy must take priority for ok.ru URLs.
+        registerExtractorAPI(OkRuSSL())
+        // Resolves the "Dailymotion [ADS]" relay (player.nunadrama.sbs) to its embedded
+        // geo.dailymotion.com player.
+        registerExtractorAPI(Nunadrama())
     }
 }
