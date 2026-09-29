@@ -134,15 +134,36 @@ class Anichin : MainAPI() {
         }
     }
 
-    private fun extractPoster(aTag: Element): String? {
-        val img = aTag.selectFirst("img") ?: return null
-        val raw = img.attr("src")
-            .ifBlank { img.attr("data-src") }
-            .ifBlank { img.attr("data-lazy-src") }
-        val cleaned = raw.split("?")[0]
+    /**
+     * Normalises a raw URL string (absolute, protocol-relative or root-relative) into a
+     * fully qualified URL. Anichin stores every asset as a root-relative path, so raw
+     * values must never reach CloudStream unfixed or Coil renders the placeholder.
+     */
+    private fun normalizeImageUrl(raw: String?): String? {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isBlank()) return null
+        val cleaned = trimmed.split("?")[0]
         val fixed = if (cleaned.startsWith("//")) "https:$cleaned" else cleaned
         return fixUrlNull(fixed)
     }
+
+    private fun extractImageUrl(img: Element?): String? {
+        val raw = img?.run {
+            attr("src")
+                .ifBlank { attr("data-src") }
+                .ifBlank { attr("data-lazy-src") }
+        }
+        return normalizeImageUrl(raw)
+    }
+
+    /** Reads `og:image` (and the Twitter fallback) from a document, normalising the value. */
+    private fun extractMetaImage(doc: Document): String? {
+        val raw = doc.selectFirst("meta[property=og:image]")?.attr("content")
+            ?: doc.selectFirst("meta[name=twitter:image]")?.attr("content")
+        return normalizeImageUrl(raw)
+    }
+
+    private fun extractPoster(aTag: Element): String? = extractImageUrl(aTag.selectFirst("img"))
 
     /**
      * Sinopsis extraction strategy (verified against live pages 2026-07):
@@ -305,8 +326,9 @@ class Anichin : MainAPI() {
                     ?.replace(Regex("\\s*Episode\\s+\\d+.*", RegexOption.IGNORE_CASE), "")?.trim()
                 ?: ""
 
-            val poster = epDoc.selectFirst("div.thumb img")?.attr("src")
-                ?: epDoc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
+            val poster = extractImageUrl(epDoc.selectFirst("div.thumb img"))
+                ?: extractMetaImage(epDoc)
+                ?: ""
 
             val description = extractSinopsis(epDoc, title)
             val genres = epDoc.select("div.genxed a").map { it.text().trim() }
@@ -322,13 +344,11 @@ class Anichin : MainAPI() {
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
                 val h3Text = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
                 val (epNum, epTheme, epDate) = parseEpisodeFromSpan(spanText, h3Text)
-                val epPoster = li.selectFirst("div.thumbnel img")?.run {
-                    attr("src").ifBlank { attr("data-src") }
-                }.orEmpty()
+                val epPoster = extractImageUrl(li.selectFirst("div.thumbnel img"))
                 newEpisode(epHref) {
                     this.name = epTheme
                     this.episode = epNum
-                    this.posterUrl = epPoster.ifBlank { poster }
+                    this.posterUrl = epPoster ?: poster
                     this.date = epDate
                 }
             }.reversed()
@@ -348,8 +368,9 @@ class Anichin : MainAPI() {
         val document = app.get(seriesUrl, headers = browserHeaders).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
-        val poster = document.selectFirst("div.thumb img")?.attr("src")
-            ?: document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
+        val poster = extractImageUrl(document.selectFirst("div.thumb img"))
+            ?: extractMetaImage(document)
+            ?: ""
 
         val description = extractSinopsis(document, title)
         val genres = document.select("div.genxed a").map { it.text().trim() }
@@ -370,13 +391,14 @@ class Anichin : MainAPI() {
                 val epNum = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
                 val epDate = parseEnglishDate(li.selectFirst("div.epl-date")?.text()?.trim())
-                val epPoster = li.selectFirst("div.epl-image img")?.run {
-                    attr("src").ifBlank { attr("data-src") }
-                }.orEmpty()
+                // Anichin's eplister rows carry no per-episode image (verified live: the
+                // only image inside `div.eplister` is absent), so this normally falls back
+                // to the series poster below. Kept as a defensive selector.
+                val epPoster = extractImageUrl(li.selectFirst("div.epl-image img"))
                 newEpisode(epHref) {
                     this.name = epTitle
                     this.episode = epNum
-                    this.posterUrl = epPoster.ifBlank { poster }
+                    this.posterUrl = epPoster ?: poster
                     this.date = epDate
                 }
             }.reversed()
