@@ -28,6 +28,16 @@ class Anichin : MainAPI() {
         "Upgrade-Insecure-Requests" to "1",
     )
 
+    /**
+     * Anichin serves its /wp-content/uploads/ images behind Cloudflare hotlink protection: a
+     * request whose Referer is empty, "http://", or not rooted at "https://anichin.moe/" gets
+     * a 403 (verified live 2026-11: no Referer -> 403, `Referer: https://anichin.moe/` -> 200
+     * image/webp). Coil loads posters with no Referer, so every thumbnail stayed blank.
+     * These headers are handed to Coil through `posterHeaders` on search/load responses.
+     */
+    private fun posterHeaders(): Map<String, String> =
+        mapOf("Referer" to "$mainUrl/")
+
     override val mainPage = mainPageOf(
         "" to "Rilisan Terbaru",
         "popular-today" to "Populer Hari Ini",
@@ -131,6 +141,7 @@ class Anichin : MainAPI() {
         return newAnimeSearchResponse(title, href, tvType) {
             this.posterUrl = poster
             addDubStatus(DubStatus.Subbed, epxNumber)
+            this.posterHeaders = posterHeaders()
         }
     }
 
@@ -344,11 +355,14 @@ class Anichin : MainAPI() {
                 val spanText = li.selectFirst("div.playinfo span")?.text()?.trim() ?: ""
                 val h3Text = li.selectFirst("div.playinfo h3")?.text()?.trim() ?: ""
                 val (epNum, epTheme, epDate) = parseEpisodeFromSpan(spanText, h3Text)
-                val epPoster = extractImageUrl(li.selectFirst("div.thumbnel img"))
+                // Episode images sit on the same hotlink-protected host and CloudStream's
+                // Episode model has no header field, so they can never carry the Referer.
+                // Reuse the header-backed series poster URL: Coil keys its image cache by
+                // URL, so the episode thumbnail is served from the poster's cached response.
                 newEpisode(epHref) {
                     this.name = epTheme
                     this.episode = epNum
-                    this.posterUrl = epPoster ?: poster
+                    this.posterUrl = poster
                     this.date = epDate
                 }
             }.reversed()
@@ -362,6 +376,7 @@ class Anichin : MainAPI() {
                 this.tags = genres
                 this.showStatus = showStatus
                 this.score = Score.from10(ratingText?.toDoubleOrNull() ?: 0.0)
+                this.posterHeaders = posterHeaders()
             }
         }
 
@@ -391,14 +406,13 @@ class Anichin : MainAPI() {
                 val epNum = Regex("\\d+").findAll(epNumRaw).lastOrNull()?.value?.toIntOrNull()
                 val epTitle = li.selectFirst("div.epl-title")?.text()?.trim()?.ifBlank { null }
                 val epDate = parseEnglishDate(li.selectFirst("div.epl-date")?.text()?.trim())
-                // Anichin's eplister rows carry no per-episode image (verified live: the
-                // only image inside `div.eplister` is absent), so this normally falls back
-                // to the series poster below. Kept as a defensive selector.
-                val epPoster = extractImageUrl(li.selectFirst("div.epl-image img"))
+                // eplister rows carry no per-episode image, and any `div.epl-image` on the
+                // same hotlink-protected host would 403 without a Referer. Reuse the series
+                // poster URL so the episode thumbnail renders from Coil's image cache.
                 newEpisode(epHref) {
                     this.name = epTitle
                     this.episode = epNum
-                    this.posterUrl = epPoster ?: poster
+                    this.posterUrl = poster
                     this.date = epDate
                 }
             }.reversed()
@@ -420,6 +434,7 @@ class Anichin : MainAPI() {
             this.tags = genres
             this.showStatus = showStatus
             this.score = Score.from10(ratingText?.toDoubleOrNull() ?: 0.0)
+            this.posterHeaders = posterHeaders()
         }
     }
 
