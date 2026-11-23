@@ -177,7 +177,7 @@ class Donghub : MainAPI() {
                 list = HomePageList(name = request.name, list = emptyList(), isHorizontalImages = false),
                 hasNext = false
             )
-            val document = getDocument(mainUrl)
+            val document = getDocument(cacheBusted(mainUrl))
             val items = document.select("div.popconslide article").mapNotNull { it.toSearchResult() }
             return newHomePageResponse(
                 list = HomePageList(name = request.name, list = items, isHorizontalImages = false),
@@ -191,7 +191,7 @@ class Donghub : MainAPI() {
             else -> "$mainUrl/${request.data}&page=$page"
         }
 
-        val document = getDocument(url)
+        val document = getDocument(cacheBusted(url))
 
         val items = if (request.data.isEmpty()) {
             val latestSection = document.select("div.bixbox").firstOrNull { box ->
@@ -211,13 +211,25 @@ class Donghub : MainAPI() {
         )
     }
 
+    // LiteSpeed serves pages with a 7-day TTL and does not purge every URL when
+    // a post lands. Evidence: /tales-of-herding-gods/ answered with
+    // x-litespeed-cache: hit and episodes 17..109 while episode 110 was already
+    // live, and /anime/?status=&type=&order=update hid the newly updated series
+    // that the same URL with a query string returned. Every such URL that gets a
+    // `?`/`&_cb=` token misses the cache, so a per-minute token keeps listings,
+    // search and series episode lists current without hammering the origin.
+    private fun cacheBusted(url: String): String {
+        val token = System.currentTimeMillis() / 60_000
+        return if (url.contains("?")) "$url&_cb=$token" else "$url?_cb=$token"
+    }
+
     private suspend fun loadSeriesViaEpisode(episodeUrl: String): Pair<String, Document> {
-        val firstDoc = getDocument(episodeUrl)
+        val firstDoc = getDocument(cacheBusted(episodeUrl))
         val allEpsLink = firstDoc
             .selectFirst("div.naveps.bignav .nvs.nvsc a")?.attr("href")
         return if (allEpsLink != null) {
             val seriesUrl = fixUrl(allEpsLink)
-            seriesUrl to getDocument(seriesUrl)
+            seriesUrl to getDocument(cacheBusted(seriesUrl))
         } else {
             episodeUrl to firstDoc
         }
@@ -394,7 +406,7 @@ class Donghub : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = getDocument("$mainUrl/?s=$query")
+        val document = getDocument(cacheBusted("$mainUrl/?s=$query"))
         return document.select("div.listupd article").mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
@@ -415,7 +427,7 @@ class Donghub : MainAPI() {
 
         if (derivedSeriesUrl != null) {
             val derivedDoc = try {
-                getDocument(derivedSeriesUrl)
+                getDocument(cacheBusted(derivedSeriesUrl))
             } catch (e: Throwable) {
                 Log.w(TAG, "Derived series page failed, falling back: ${e.message}")
                 null
